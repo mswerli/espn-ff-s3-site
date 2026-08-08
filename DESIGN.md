@@ -1,9 +1,13 @@
 # Who Dat League — AWS Hosting Design
 
-Status: draft, not yet built
-Companion repo: [who_dat_history](https://github.com/) — front-end (`index.html`/`style.css`) and the
-original local ESPN-fetch scripts (`scripts/*.py`, `helpers/utilities.py`) this design replaces the
-data-generation half of.
+Status: draft, not yet built. Data-generation refactor (Phase 1) is done — see `who_dat/`.
+
+Sibling repo: `who_dat_history` — the original front-end (`index.html`/`style.css`) and local
+ESPN-fetch scripts (`scripts/*.py`, `helpers/utilities.py`) this design replaces the data-generation
+half of. It remains the **live GitHub Pages source today** and is intentionally unmodified. The copy
+of the front-end under this repo's `site/` (see decision #7) has already diverged from it — it picked
+up a config-driven title/subtitle read from `league_config.json` — and going forward `site/` here is
+the one that evolves; `who_dat_history` isn't a live upstream to sync from anymore.
 
 ## Goal
 
@@ -77,9 +81,13 @@ SAM does **not** upload arbitrary files (`index.html`, `style.css`) into the buc
 only pushes infrastructure and Lambda code. Static asset publishing is a separate, simple step:
 
 ```
-sam build && sam deploy                                              # infra + Lambda code
-aws s3 sync site/ s3://$BUCKET/ --exclude "*.csv" --exclude "*.json"  # static assets (rare changes)
-# *.csv and *.json are never synced from git — only the Lambda writes those, to the bucket root
+sam build && sam deploy                                      # infra + Lambda code
+aws s3 sync site/ s3://$BUCKET/                               # static assets (rare changes)
+aws s3 cp league_config.json s3://$BUCKET/league_config.json  # config the front-end also reads —
+                                                                # canonical copy lives at repo root,
+                                                                # not in site/ (see decision #4)
+# The Lambda's own outputs (*.csv, survivor_results.json, weekly_payout_winners.json) are never
+# synced from git — only the Lambda writes those, straight to the bucket root.
 ```
 
 ### 3. Lambda packaging: AWS-managed Pandas layer, zip-based, no container image
@@ -89,13 +97,22 @@ public layer (`AWSSDKPandas-Python31x`) with pandas + numpy prebuilt. `espn_api`
 Python/`requests` and small. So: a normal zip-based Lambda plus that one managed layer — no ECR, no
 Docker build step, faster iteration.
 
-### 4. Config vs. secrets are split
+### 4. Config vs. secrets are split — and `league_config.json` specifically is public
 
-- `league_config.json`, `config/weekly_payouts_config.json`, `owner_map.json`: not sensitive, and the
-  original repo already treats `league_config.json` as the thing that makes it reusable for other
-  ESPN leagues (see the docstring on `get_league_config` in `helpers/utilities.py`). These live in an
-  S3 config prefix (or get passed directly in the EventBridge invocation payload) so the Lambda
-  genuinely *takes a configuration* as input rather than having one baked into the deployment package.
+- `league_config.json` is no longer Lambda-input-only: `site/index.html` now fetches it directly
+  (`fetch("league_config.json")`, with a `.catch()` that falls back to hardcoded defaults) to render
+  the site title/subtitle, so the page itself is config-driven rather than hardcoded per league. That
+  means `league_config.json` must be publicly readable at the site bucket root, same as the CSVs.
+  Its canonical location stays where `who_dat/config.py`'s `LEAGUE_CONFIG_PATH` already puts it — the
+  **project root**, alongside `who_dat/`, not inside `site/` — since that's already built, tested, and
+  committed, and both the Lambda and the local scripts read it from there. Rather than moving it (and
+  touching tested code) or duplicating it into `site/`, the deploy step copies that one file to the
+  bucket root as an explicit step alongside the `site/` sync (see decision #7). Same Lambda config
+  input, same file the browser fetches, no drift — just not literally inside `site/` on disk.
+- `config/weekly_payouts_config.json` and `owner_map.json`: still not sensitive, but not fetched by
+  the browser (only used server-side, by the Lambda, to build payout rules and owner initials). These
+  can stay in a private S3 config prefix (or get passed directly in the EventBridge invocation
+  payload) — no reason to expose them publicly just because `league_config.json` now needs to be.
 - ESPN `swid`/`espn_s2` cookies: real session credentials. These go in **Secrets Manager**, never
   alongside public site data in S3.
 
@@ -134,44 +151,55 @@ write-to-project-root behavior) — the Lambda path is additive, not a replaceme
 
 ### 7. Publishing — flat bucket root, not a `data/` prefix
 
-`site/index.html` ([copied unmodified from `who_dat_history`](site/index.html)) fetches its data with
-bare relative filenames — `fetch("league_history.csv")`, `fetch("head_to_head_lifetime.csv")`, etc. —
-so it expects those files in the **same directory** as `index.html`, not under a subfolder. An earlier
-draft of this design had the Lambda writing to a `data/` prefix; that was a front-end/infra mismatch
-(every table would have 404'd) and has been corrected here: the Lambda writes flat to the bucket root,
-matching exactly what the existing local scripts already do via `output_path()`. This also means the
-local CSV output path and the S3 upload path are identical, so there's one thing less to keep in sync.
+`site/index.html` fetches its data with bare relative filenames — `fetch("league_history.csv")`,
+`fetch("head_to_head_lifetime.csv")`, etc. — so it expects those files in the **same directory** as
+`index.html`, not under a subfolder. An earlier draft of this design had the Lambda writing to a
+`data/` prefix; that was a front-end/infra mismatch (every table would have 404'd) and has been
+corrected here: the Lambda writes flat to the bucket root, matching exactly what the existing local
+scripts already do via `output_path()`. This also means the local CSV output path and the S3 upload
+path are identical, so there's one thing less to keep in sync.
+
+(`site/index.html` isn't a byte-for-byte copy of the original `who_dat_history/index.html` — it also
+picked up a config-driven title/subtitle: `id="site-title"`/`id="site-subtitle"` header elements plus
+a `fetch("league_config.json")` block, with a `.catch()` that falls back to the hardcoded defaults if
+the file is missing. See decision #4.)
 
 The Lambda must upload each file under the **exact same name** the front-end already fetches
 (case-sensitive, S3 keys aren't forgiving like a case-insensitive local filesystem):
 
-| File | Front-end reference |
+| File | Written by |
 |---|---|
-| `league_history.csv` | [index.html](site/index.html) |
-| `head_to_head_lifetime.csv` | [index.html](site/index.html) |
-| `advanced_team_metrics.csv` | [index.html](site/index.html) |
-| `all_time_records.csv` | [index.html](site/index.html) |
-| `most_drafted_players.csv` | [index.html](site/index.html) |
-| `weekly_efficiency_awards.csv` | [index.html](site/index.html) |
-| `survivor_results.json` | [index.html](site/index.html) |
-| `weekly_payout_winners.json` | [index.html](site/index.html) |
+| `league_config.json` | `aws s3 cp` from the repo root, alongside the `site/` sync — see decision #4; not the Lambda |
+| `league_history.csv` | Lambda |
+| `head_to_head_lifetime.csv` | Lambda |
+| `advanced_team_metrics.csv` | Lambda |
+| `all_time_records.csv` | Lambda |
+| `most_drafted_players.csv` | Lambda |
+| `weekly_efficiency_awards.csv` | Lambda |
+| `survivor_results.json` | Lambda |
+| `weekly_payout_winners.json` | Lambda |
 
-The Lambda writes each output to `/tmp`, then uses `boto3` to upload it to `s3://<site-bucket>/<file>`
-with the right `Content-Type` set explicitly (`text/csv`, `application/json` — `boto3.upload_file`
-does not infer this the way `aws s3 sync` does for the static assets, so it must be passed
-per-file). No cache invalidation step is needed since there's no CloudFront in front of the bucket.
+The Lambda writes each of its outputs to `/tmp`, then uses `boto3` to upload it to
+`s3://<site-bucket>/<file>` with the right `Content-Type` set explicitly (`text/csv`,
+`application/json` — `boto3.upload_file` does not infer this the way `aws s3 sync` does for the
+static assets, so it must be passed per-file). No cache invalidation step is needed since there's no
+CloudFront in front of the bucket.
 
-The `aws s3 sync site/ ...` step for static assets (decision #2) must exclude `*.csv`/`*.json` so it
-never clobbers the Lambda's output — already reflected in that command.
+`site/` itself never contains any Lambda-written file (all eight of those are gitignored at the repo
+root, not under `site/`), so the `aws s3 sync site/ ...` step (decision #2) needs no excludes at all —
+it can only ever touch `index.html`/`style.css`. The one extra file the deploy step must also push,
+`league_config.json`, is handled by its own explicit `aws s3 cp` (shown in decision #2), precisely
+because it lives outside `site/` and isn't something a `site/` sync would pick up anyway.
 
-### 8. Front-end error handling is unchanged, and that's a minor known gap
+### 8. Front-end error handling is inconsistent, and that's a minor known gap
 
-None of `index.html`'s eight `fetch()` chains has a `.catch()` — a missing or failed file just leaves
-that section's table empty rather than showing an error. That's pre-existing behavior, not something
-this migration introduces, but it's more likely to matter once data freshness depends on an unattended
-weekly Lambda run instead of a human confirming the files exist before copying them up. Not a blocker
-for the initial build; worth revisiting once the pipeline is live (e.g. a small "data last updated"
-indicator, or at least a visible error state instead of a silently empty table).
+Only the new `league_config.json` fetch has a `.catch()` (falls back to hardcoded defaults). The
+other eight `fetch()` chains in `index.html` don't — a missing or failed file just leaves that
+section's table empty rather than showing an error. That's mostly pre-existing behavior, not
+something this migration introduces, but it's more likely to matter once data freshness depends on an
+unattended weekly Lambda run instead of a human confirming the files exist before copying them up.
+Not a blocker for the initial build; worth revisiting once the pipeline is live (e.g. a small "data
+last updated" indicator, or at least a visible error state instead of a silently empty table).
 
 ### 9. Trigger
 
