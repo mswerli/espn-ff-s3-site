@@ -49,12 +49,12 @@ EventBridge Scheduler (weekly cron, in-season)
    │  owner map, payouts rules, awards
    ├─ reads ESPN cookies from Secrets Manager
    ├─ calls espn_api, builds the same 8 CSV/JSON outputs (refactored from scripts/)
-   └─ uploads outputs to  s3://<site-bucket>/data/*
+   └─ uploads outputs to  s3://<site-bucket>/*.csv, *.json   (bucket root — see decision #7)
         │
         ▼
    S3 bucket (static website hosting, plain HTTP endpoint — no CloudFront)
    ├─ index.html, style.css        ← synced from git on demand, rarely changes
-   └─ data/*.csv, data/*.json      ← overwritten weekly by the Lambda, never committed to git
+   └─ *.csv, *.json                ← overwritten weekly by the Lambda, never committed to git
 ```
 
 ## Key decisions
@@ -77,9 +77,9 @@ SAM does **not** upload arbitrary files (`index.html`, `style.css`) into the buc
 only pushes infrastructure and Lambda code. Static asset publishing is a separate, simple step:
 
 ```
-sam build && sam deploy                                    # infra + Lambda code
-aws s3 sync site/ s3://$BUCKET/ --exclude "data/*"          # static assets (rare changes)
-# data/*.csv and data/*.json are never synced from git — only the Lambda writes those
+sam build && sam deploy                                              # infra + Lambda code
+aws s3 sync site/ s3://$BUCKET/ --exclude "*.csv" --exclude "*.json"  # static assets (rare changes)
+# *.csv and *.json are never synced from git — only the Lambda writes those, to the bucket root
 ```
 
 ### 3. Lambda packaging: AWS-managed Pandas layer, zip-based, no container image
@@ -132,13 +132,48 @@ scripts/                 # thin CLI wrappers for local runs/debugging, unchanged
 Local dev keeps working like the current repo (same `ignore/*.json` files, same
 write-to-project-root behavior) — the Lambda path is additive, not a replacement for local iteration.
 
-### 7. Publishing
+### 7. Publishing — flat bucket root, not a `data/` prefix
 
-The Lambda writes each output to `/tmp`, then uses `boto3` to upload it to
-`s3://<site-bucket>/data/<file>` with the right `Content-Type` (`text/csv`, `application/json`). No
-cache invalidation step is needed since there's no CloudFront in front of the bucket.
+`site/index.html` ([copied unmodified from `who_dat_history`](site/index.html)) fetches its data with
+bare relative filenames — `fetch("league_history.csv")`, `fetch("head_to_head_lifetime.csv")`, etc. —
+so it expects those files in the **same directory** as `index.html`, not under a subfolder. An earlier
+draft of this design had the Lambda writing to a `data/` prefix; that was a front-end/infra mismatch
+(every table would have 404'd) and has been corrected here: the Lambda writes flat to the bucket root,
+matching exactly what the existing local scripts already do via `output_path()`. This also means the
+local CSV output path and the S3 upload path are identical, so there's one thing less to keep in sync.
 
-### 8. Trigger
+The Lambda must upload each file under the **exact same name** the front-end already fetches
+(case-sensitive, S3 keys aren't forgiving like a case-insensitive local filesystem):
+
+| File | Front-end reference |
+|---|---|
+| `league_history.csv` | [index.html](site/index.html) |
+| `head_to_head_lifetime.csv` | [index.html](site/index.html) |
+| `advanced_team_metrics.csv` | [index.html](site/index.html) |
+| `all_time_records.csv` | [index.html](site/index.html) |
+| `most_drafted_players.csv` | [index.html](site/index.html) |
+| `weekly_efficiency_awards.csv` | [index.html](site/index.html) |
+| `survivor_results.json` | [index.html](site/index.html) |
+| `weekly_payout_winners.json` | [index.html](site/index.html) |
+
+The Lambda writes each output to `/tmp`, then uses `boto3` to upload it to `s3://<site-bucket>/<file>`
+with the right `Content-Type` set explicitly (`text/csv`, `application/json` — `boto3.upload_file`
+does not infer this the way `aws s3 sync` does for the static assets, so it must be passed
+per-file). No cache invalidation step is needed since there's no CloudFront in front of the bucket.
+
+The `aws s3 sync site/ ...` step for static assets (decision #2) must exclude `*.csv`/`*.json` so it
+never clobbers the Lambda's output — already reflected in that command.
+
+### 8. Front-end error handling is unchanged, and that's a minor known gap
+
+None of `index.html`'s eight `fetch()` chains has a `.catch()` — a missing or failed file just leaves
+that section's table empty rather than showing an error. That's pre-existing behavior, not something
+this migration introduces, but it's more likely to matter once data freshness depends on an unattended
+weekly Lambda run instead of a human confirming the files exist before copying them up. Not a blocker
+for the initial build; worth revisiting once the pipeline is live (e.g. a small "data last updated"
+indicator, or at least a visible error state instead of a silently empty table).
+
+### 9. Trigger
 
 EventBridge Scheduler, weekly cron during the NFL season (e.g. Tuesday morning after Monday Night
 Football). The Lambda can also be invoked manually via the AWS console/CLI for on-demand refresh — no
@@ -150,7 +185,7 @@ public API Gateway endpoint is needed for a personal project.
 who-dat-infra/
   DESIGN.md              # this file
   template.yaml           # SAM template: bucket, Lambda, layer, role, schedule
-  site/                   # index.html, style.css — synced to the bucket, never includes data/
+  site/                   # index.html, style.css — synced to the bucket root; Lambda output (*.csv/*.json) is not part of this folder
   who_dat/                # shared report-building code (see above)
   lambda_function.py      # Lambda entrypoint
   scripts/                # local CLI wrappers
@@ -167,10 +202,10 @@ who-dat-infra/
    `index.html`/`style.css`/CSVs, confirm the site renders identically to local. Validates hosting
    independent of the Lambda.
 3. **Lambda MVP**: build `lambda_function.py` on the refactored report functions + the AWS Pandas
-   layer; test by invoking directly against a scratch S3 prefix, not the live `data/` prefix.
+   layer; test by invoking directly against a scratch S3 bucket/prefix, not the live site bucket.
 4. **Secrets/config wiring**: move ESPN cookies to Secrets Manager; put league/owner/payout config in
    the S3 config prefix (or pass via the EventBridge input payload).
-5. **Automate**: EventBridge weekly schedule → Lambda → `data/` prefix in the site bucket. Run
+5. **Automate**: EventBridge weekly schedule → Lambda → bucket root of the site bucket. Run
    end-to-end once, verify the live site picks up fresh data.
 6. **Season-cache optimization**: add the prior-season-cache/merge logic (decision #5 above) once the
    basic pipeline is proven, so weekly runs stay fast as more seasons accumulate.

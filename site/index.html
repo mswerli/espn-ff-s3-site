@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Who Dat League</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <div>
+      <h1 id="site-title">Who Dat League</h1>
+      <p class="subtitle" id="site-subtitle">None of us are as dumb as all of us</p>
+    </div>
+    <nav class="nav">
+      <button onclick="showTab('history-tab')">History</button>
+      <button onclick="showTab('h2h-tab')">Head to Head</button>
+      <button onclick="showTab('records-tab')">Records</button>
+      <button onclick="showTab('habits-tab')">Habits</button>
+      <button onclick="showTab('advanced-tab')">Advanced</button>
+      <button onclick="showTab('summaries-tab')">Weekly</button>
+    </nav>
+  </div>
+</header>
+
+<main class="container">
+
+<!-- ================= HISTORY ================= -->
+<section id="history-tab" class="tab active">
+  <div class="card">
+    <h2>Season Breakdown</h2>
+
+    <label for="season-select">Season</label>
+    <select id="season-select">
+      <option value="all">All</option>
+    </select>
+
+    <div id="tables-container"></div>
+  </div>
+</section>
+
+<!-- ================= H2H ================= -->
+<section id="h2h-tab" class="tab">
+  <div class="card">
+    <h2>Head-to-Head</h2>
+
+    <label for="owner-select">Owner</label>
+    <select id="owner-select" onchange="filterH2H()"></select>
+
+    <div class="table-wrapper">
+      <table id="h2h-table">
+        <thead>
+          <tr>
+            <th>Opponent</th>
+            <th>Games</th>
+            <th>Wins</th>
+            <th>Losses</th>
+            <th>Ties</th>
+            <th>PF</th>
+            <th>PA</th>
+            <th>Diff</th>
+            <th>Win %</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= RECORDS ================= -->
+<section id="records-tab" class="tab">
+  <div class="card">
+    <h2>All-Time Records</h2>
+
+    <label for="category-filter">Category</label>
+    <select id="category-filter">
+      <option value="All">All</option>
+      <option value="Team Game">Team Game</option>
+      <option value="Single Game">Single Game</option>
+    </select>
+
+    <div class="table-wrapper">
+      <table id="records-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Record</th>
+            <th>Owner</th>
+            <th>Detail</th>
+            <th>Points</th>
+            <th>Year</th>
+            <th>Week</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HABITS ================= -->
+<section id="habits-tab" class="tab">
+  <div class="card">
+    <h2>Owner Habits</h2>
+    <div class="table-wrapper">
+      <table id="habits-table">
+        <thead>
+          <tr>
+            <th>Owner</th>
+            <th>Player</th>
+            <th>Times Drafted</th>
+            <th>Seasons</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ADVANCED ================= -->
+<section id="advanced-tab" class="tab">
+  <div class="card">
+    <h2>Advanced Metrics</h2>
+
+    <label for="advanced-season-select">Season</label>
+    <select id="advanced-season-select">
+      <option value="all">All Time</option>
+    </select>
+
+    <div id="advanced-table-container"></div>
+  </div>
+</section>
+
+<!-- ================= WEEKLY ================= -->
+<section id="summaries-tab" class="tab">
+  <div class="card">
+    <h2>Weekly Summaries</h2>
+
+    <h3>Alive in Survivor</h3>
+    <ul id="survivor-list" class="pill-list"></ul>
+
+    <h3>Summary Overview</h3>
+    <div class="table-wrapper">
+      <table id="weekly-summary-overview">
+        <thead>
+          <tr>
+            <th>Owner</th>
+            <th>Payouts Won</th>
+            <th>Survivor Exit (Week)</th>
+            <th>🔥 Regression Plaques</th>
+            <th>🧱 Crawlspace Trophies</th>
+            <th>🧠 Clipboards</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="filter-bar">
+      <label for="week-select"><strong>Week</strong></label>
+      <select id="week-select"></select>
+    </div>
+
+    <ul id="weekly-awards-list" class="weekly-awards"></ul>
+  </div>
+</section>
+
+</main>
+
+<script>
+/* ================= SITE CONFIG (per-league title/subtitle) ================= */
+fetch("league_config.json")
+  .then(res => res.json())
+  .then(config => {
+    const site = config.site || {};
+    if (site.title) {
+      document.title = site.title;
+      document.getElementById("site-title").textContent = site.title;
+    }
+    if (site.subtitle) {
+      document.getElementById("site-subtitle").textContent = site.subtitle;
+    }
+  })
+  .catch(() => { /* league_config.json missing - keep the defaults in the HTML */ });
+
+/* ================= TAB CONTROL ================= */
+function showTab(id) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+}
+
+/* ================= CSV PARSER (handles quotes/commas) ================= */
+function parseCSV(csv) {
+  const lines = csv.trim().split("\n");
+  const headers = lines[0].split(",");
+  const rows = lines.slice(1).map(line => {
+    let vals = [], cur = "", q = false;
+    for (const c of line) {
+      if (c === '"') q = !q;
+      else if (c === "," && !q) { vals.push(cur); cur = ""; }
+      else cur += c;
+    }
+    vals.push(cur);
+    return vals;
+  });
+  return { headers, rows };
+}
+
+/* ================= SORTABLE TABLE ================= */
+function makeTableSortable(table) {
+  table.querySelectorAll("th").forEach((th, i) => {
+    th.onclick = () => sortTable(table, i);
+  });
+}
+
+/* Basic sorter: numeric if possible, else string */
+function sortTable(table, colIndex) {
+  const tbody = table.querySelector("tbody");
+  if (!tbody) return;
+
+  const rows = Array.from(tbody.querySelectorAll("tr"));
+  const th = table.querySelectorAll("thead th")[colIndex];
+  const ascending = !(th && th.dataset && th.dataset.sortDir === "asc");
+
+  // reset all headers dir, set on this one
+  table.querySelectorAll("thead th").forEach(h => h.dataset.sortDir = "");
+  if (th) th.dataset.sortDir = ascending ? "asc" : "desc";
+
+  const getCell = (tr) => {
+    const td = tr.children[colIndex];
+    return td ? td.textContent.trim() : "";
+  };
+
+  const toNumber = (s) => {
+    const cleaned = s.replace(/[%,$]/g, "").replace(/,/g, "").trim();
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  rows.sort((a, b) => {
+    const av = getCell(a);
+    const bv = getCell(b);
+
+    const an = toNumber(av);
+    const bn = toNumber(bv);
+
+    if (an !== null && bn !== null) {
+      return ascending ? (an - bn) : (bn - an);
+    }
+    return ascending ? av.localeCompare(bv) : bv.localeCompare(av);
+  });
+
+  tbody.innerHTML = "";
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+/* ============================================================
+   LEAGUE HISTORY — ONE TABLE, DROPDOWN CONTROLS IT
+============================================================ */
+fetch("league_history.csv")
+  .then(res => res.text())
+  .then(csv => {
+    const { headers, rows } = parseCSV(csv);
+
+    const idx = {
+      year: headers.indexOf("Year"),
+      ownerId: headers.indexOf("Owner ID"),
+      owner: headers.indexOf("Owner Name"),
+      wins: headers.indexOf("Wins"),
+      losses: headers.indexOf("Losses"),
+      pf: headers.indexOf("Points For"),
+      pa: headers.indexOf("Points Against"),
+      standing: headers.indexOf("Final Standing"),
+      sacko: headers.indexOf("Sacko"),
+      champion: headers.indexOf("Champion")
+    };
+
+    const seasonMap = {};
+    rows.forEach(r => {
+      const y = r[idx.year];
+      if (!seasonMap[y]) seasonMap[y] = [];
+      seasonMap[y].push(r);
+    });
+
+    const seasonSelect = document.getElementById("season-select");
+    seasonSelect.innerHTML = `<option value="all">All</option>`;
+    const years = Object.keys(seasonMap).sort((a, b) => b - a);
+    years.forEach(y => {
+      const opt = document.createElement("option");
+      opt.value = y;
+      opt.textContent = y;
+      seasonSelect.appendChild(opt);
+    });
+
+    const container = document.getElementById("tables-container");
+    container.innerHTML = `
+      <div class="table-wrapper">
+        <table id="history-season-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    `;
+
+    const table = document.getElementById("history-season-table");
+    const thead = table.querySelector("thead");
+    const tbody = table.querySelector("tbody");
+
+    function setHeader(mode) {
+      if (mode === "all") {
+        thead.innerHTML = `
+          <tr>
+            <th>Owner</th>
+            <th>Seasons</th>
+            <th>Wins</th>
+            <th>Losses</th>
+            <th>Win %</th>
+            <th>Points For</th>
+            <th>Points Against</th>
+            <th>Point Diff</th>
+            <th>Championships</th>
+            <th>Sackos</th>
+          </tr>
+        `;
+      } else {
+        thead.innerHTML = `
+          <tr>
+            <th>Owner</th>
+            <th>Wins</th>
+            <th>Losses</th>
+            <th>Win %</th>
+            <th>Points For</th>
+            <th>Points Against</th>
+            <th>Point Diff</th>
+          </tr>
+        `;
+      }
+    }
+
+    function renderAllTimeAggregated() {
+      const agg = {};
+
+      rows.forEach(r => {
+        const id = r[idx.ownerId];
+        if (!agg[id]) {
+          agg[id] = {
+            owner: r[idx.owner],
+            seasonsSet: new Set(),
+            wins: 0,
+            losses: 0,
+            pf: 0,
+            pa: 0,
+            champs: 0,
+            sackos: 0
+          };
+        }
+        const o = agg[id];
+        o.seasonsSet.add(r[idx.year]);
+        o.wins += +r[idx.wins];
+        o.losses += +r[idx.losses];
+        o.pf += +r[idx.pf];
+        o.pa += +r[idx.pa];
+        if (r[idx.standing] === "1") o.champs += 1;
+        if (r[idx.sacko] === "True") o.sackos += 1;
+      });
+
+      let out = Object.values(agg).map(o => {
+        const games = o.wins + o.losses;
+        const wp = games ? (o.wins / games) : 0;
+        return {
+          ...o,
+          seasons: o.seasonsSet.size,
+          wp,
+          diff: o.pf - o.pa
+        };
+      });
+
+      // 5+ seasons only
+      out = out.filter(o => o.seasons >= 5);
+
+      // Sort: Win% desc, then PF desc
+      out.sort((a, b) => (b.wp - a.wp) || (b.pf - a.pf));
+
+      tbody.innerHTML = "";
+      out.forEach(o => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${o.owner}</td>
+          <td>${o.seasons}</td>
+          <td>${o.wins}</td>
+          <td>${o.losses}</td>
+          <td>${(o.wp * 100).toFixed(1)}%</td>
+          <td>${o.pf.toFixed(2)}</td>
+          <td>${o.pa.toFixed(2)}</td>
+          <td>${o.diff.toFixed(2)}</td>
+          <td>${o.champs}</td>
+          <td>${o.sackos}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderSeason(year) {
+      const seasonRows = seasonMap[year] || [];
+      const mapped = seasonRows.map(r => {
+        const wins = +r[idx.wins];
+        const losses = +r[idx.losses];
+        const games = wins + losses;
+        const wp = games ? wins / games : 0;
+        const pf = +r[idx.pf];
+        const pa = +r[idx.pa];
+        return { r, wp, pf, pa };
+      });
+
+      mapped.sort((a, b) => (b.wp - a.wp) || (b.pf - a.pf));
+
+      tbody.innerHTML = "";
+      mapped.forEach(({ r, wp, pf, pa }) => {
+        const isChampion = r[idx.standing] === "1";
+        const isSacko = r[idx.sacko] === "True";
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>
+            ${r[idx.owner]}
+            ${isChampion ? " 🏆" : ""}
+            ${isSacko ? " 💩" : ""}
+          </td>
+          <td>${r[idx.wins]}</td>
+          <td>${r[idx.losses]}</td>
+          <td>${(wp * 100).toFixed(1)}%</td>
+          <td>${pf.toFixed(2)}</td>
+          <td>${pa.toFixed(2)}</td>
+          <td>${(pf - pa).toFixed(2)}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function render(selection) {
+      if (selection === "all") {
+        setHeader("all");
+        renderAllTimeAggregated();
+      } else {
+        setHeader("year");
+        renderSeason(selection);
+      }
+      makeTableSortable(table);
+    }
+
+    seasonSelect.value = "all";
+    render("all");
+
+    seasonSelect.addEventListener("change", e => render(e.target.value));
+  });
+
+/* ============================================================
+   HEAD TO HEAD (All-Time Only, Single Table)
+============================================================ */
+let h2hData = {};
+fetch("head_to_head_lifetime.csv")
+  .then(r => r.text())
+  .then(t => {
+    const [h, ...lines] = t.trim().split("\n");
+    const headers = h.split(",");
+    lines.forEach(l => {
+      const r = l.split(",");
+      const row = {};
+      headers.forEach((k, i) => row[k] = r[i]);
+      if (!h2hData[row["Owner Name"]]) h2hData[row["Owner Name"]] = [];
+      h2hData[row["Owner Name"]].push(row);
+    });
+
+    const sel = document.getElementById("owner-select");
+    Object.keys(h2hData).sort().forEach(o => {
+      const opt = document.createElement("option");
+      opt.value = o; opt.textContent = o;
+      sel.appendChild(opt);
+    });
+    filterH2H();
+  });
+
+function filterH2H() {
+  const owner = document.getElementById("owner-select").value;
+  const tb = document.querySelector("#h2h-table tbody");
+  tb.innerHTML = "";
+  (h2hData[owner] || []).forEach(r => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r["Opponent Name"]}</td>
+      <td>${r["Games Played"]}</td>
+      <td>${r["Wins"]}</td>
+      <td>${r["Losses"]}</td>
+      <td>${r["Ties"]}</td>
+      <td>${(+r["Points For"]).toFixed(2)}</td>
+      <td>${(+r["Points Against"]).toFixed(2)}</td>
+      <td>${((+r["Points For"]) - (+r["Points Against"])).toFixed(2)}</td>
+      <td>${(+r["Win %"]).toFixed(2)}%</td>`;
+    tb.appendChild(tr);
+  });
+  makeTableSortable(document.getElementById("h2h-table"));
+}
+
+/* ============================================================
+   ADVANCED METRICS (All-Time + Season Dropdown, ONE TABLE)
+============================================================ */
+fetch("advanced_team_metrics.csv")
+  .then(r => r.text())
+  .then(t => {
+    const { headers, rows } = parseCSV(t);
+    const idx = {
+      year: headers.indexOf("Year"),
+      owner: headers.indexOf("Owner Name"),
+      truew: headers.indexOf("Normalized True Wins"),
+      truel: headers.indexOf("Normalized True Losses"),
+      wl: headers.indexOf("True W/L"),
+      pct: headers.indexOf("True W/L %"),
+      luck: headers.indexOf("Luck Index"),
+      sos: headers.indexOf("Strength of Schedule"),
+      eff: headers.indexOf("Manager Efficiency")
+    };
+
+    const seasonMap = {}, overall = {};
+    rows.forEach(r => {
+      const y = r[idx.year];
+      if (!seasonMap[y]) seasonMap[y] = [];
+      seasonMap[y].push(r);
+
+      if (!overall[r[idx.owner]])
+        overall[r[idx.owner]] = { c: 0, w: 0, l: 0, luck: 0, sos: 0, eff: 0 };
+
+      const o = overall[r[idx.owner]];
+      o.c++;
+      o.w += +r[idx.truew];
+      o.l += +r[idx.truel];
+      o.luck += +r[idx.luck];
+      o.sos += +r[idx.sos];
+      o.eff += +r[idx.eff];
+    });
+
+    const select = document.getElementById("advanced-season-select");
+    const container = document.getElementById("advanced-table-container");
+    const tables = {};
+
+    const allTable = document.createElement("table");
+    allTable.innerHTML = `
+      <thead>
+        <tr>
+          <th>Owner</th>
+          <th>True W/L</th>
+          <th>True W/L %</th>
+          <th>Luck</th>
+          <th>SOS</th>
+          <th>Efficiency</th>
+        </tr>
+      </thead>`;
+    const allTB = document.createElement("tbody");
+
+    Object.entries(overall).forEach(([k, o]) => {
+      const total = o.w + o.l;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${k}</td>
+        <td>${o.w.toFixed(1)} - ${o.l.toFixed(1)}</td>
+        <td>${total ? (o.w / total).toFixed(3) : "0.000"}</td>
+        <td>${(o.luck / o.c).toFixed(3)}</td>
+        <td>${(o.sos / o.c).toFixed(2)}</td>
+        <td>${(o.eff / o.c).toFixed(3)}</td>`;
+      allTB.appendChild(tr);
+    });
+
+    allTable.appendChild(allTB);
+    makeTableSortable(allTable);
+    tables["all"] = allTable;
+
+    Object.keys(seasonMap).sort((a, b) => b - a).forEach(y => {
+      const opt = document.createElement("option");
+      opt.value = y; opt.textContent = y;
+      select.appendChild(opt);
+
+      const table = document.createElement("table");
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>Owner</th>
+            <th>True W/L</th>
+            <th>True %</th>
+            <th>Luck</th>
+            <th>SOS</th>
+            <th>Efficiency</th>
+          </tr>
+        </thead>`;
+      const tb = document.createElement("tbody");
+
+      seasonMap[y].forEach(r => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${r[idx.owner]}</td>
+          <td>${r[idx.wl]}</td>
+          <td>${r[idx.pct]}</td>
+          <td>${r[idx.luck]}</td>
+          <td>${(+r[idx.sos]).toFixed(2)}</td>
+          <td>${(+r[idx.eff]).toFixed(3)}</td>`;
+        tb.appendChild(tr);
+      });
+
+      table.appendChild(tb);
+      makeTableSortable(table);
+      tables[y] = table;
+    });
+
+    function renderAdvanced(v) {
+      container.innerHTML = "";
+      container.appendChild(tables[v]);
+    }
+    renderAdvanced("all");
+    select.onchange = e => renderAdvanced(e.target.value);
+  });
+
+/* ============================================================
+   RECORDS
+============================================================ */
+let allRecords = [];
+
+fetch("all_time_records.csv")
+  .then(res => res.text())
+  .then(csv => {
+    const { headers, rows } = parseCSV(csv);
+
+    const idx = {
+      category: headers.indexOf("Category"),
+      record: headers.indexOf("Record"),
+      owner: headers.indexOf("Owner"),
+      detail: headers.indexOf("Detail"),
+      points: headers.indexOf("Points"),
+      year: headers.indexOf("Year"),
+      week: headers.indexOf("Week")
+    };
+
+    allRecords = rows.map(r => ({
+      Category: r[idx.category],
+      Record: r[idx.record],
+      Owner: r[idx.owner],
+      Detail: r[idx.detail],
+      Points: r[idx.points],
+      Year: r[idx.year],
+      Week: r[idx.week]
+    }));
+
+    renderRecords("All");
+    makeTableSortable(document.getElementById("records-table"));
+  });
+
+function renderRecords(category) {
+  const tbody = document.querySelector("#records-table tbody");
+  tbody.innerHTML = "";
+
+  allRecords
+    .filter(r => category === "All" || r.Category === category)
+    .forEach(r => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${r.Category}</td>
+        <td>${r.Record}</td>
+        <td>${r.Owner}</td>
+        <td>${r.Detail}</td>
+        <td>${r.Points}</td>
+        <td>${r.Year}</td>
+        <td>${r.Week}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+}
+
+document.getElementById("category-filter").addEventListener("change", e => {
+  renderRecords(e.target.value);
+});
+
+/* ============================================================
+   HABITS
+============================================================ */
+fetch("most_drafted_players.csv")
+  .then(response => response.text())
+  .then(text => {
+    const lines = text.trim().split("\n");
+    const rows = lines.slice(1).map(line => line.split(","));
+
+    const tbody = document.querySelector("#habits-table tbody");
+    tbody.innerHTML = "";
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row[1]}</td>
+        <td>${row[2]}</td>
+        <td>${row[3]}</td>
+        <td>${row[4]}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    makeTableSortable(document.getElementById("habits-table"));
+  });
+
+/* ============================================================
+   WEEKLY SUMMARIES — FIXED (dropdown-driven)
+   Shows ONLY:
+   - weekly payouts
+   - weekly awards
+   - survivor eliminated
+============================================================ */
+Promise.all([
+  fetch("weekly_efficiency_awards.csv").then(res => res.text()),
+  fetch("survivor_results.json").then(res => res.json()),
+  fetch("weekly_payout_winners.json").then(res => res.json())
+]).then(([awardsText, survivorData, payoutData]) => {
+
+  // --- Survivor pills ---
+  const survivorList = document.getElementById("survivor-list");
+  survivorList.innerHTML = "";
+  (survivorData.remaining || []).slice().sort().forEach(owner => {
+    const li = document.createElement("li");
+    li.textContent = owner;
+    survivorList.appendChild(li);
+  });
+
+  // --- Parse awards CSV robustly (quoted commas safe) ---
+  const { headers: aHeaders, rows: aRows } = parseCSV(awardsText);
+  const aIdx = {
+    week: aHeaders.indexOf("Week"),
+    owner: aHeaders.indexOf("Owner"),
+    award: aHeaders.indexOf("Award"),
+    detail: aHeaders.indexOf("Detail"),
+    value: aHeaders.indexOf("Value")
+  };
+
+  // weekMap shape MUST match renderWeek expectations
+  // weekMap[w] = { payouts: [...], awards: { awardName: { owners:Set, detail, value } }, survivorEliminated:[...] }
+  const weekMap = {};
+  const ensureWeek = (w) => {
+    const key = String(w);
+    if (!weekMap[key]) weekMap[key] = { payouts: [], awards: {}, survivorEliminated: [] };
+    return weekMap[key];
+  };
+
+  // --- Build awards: carry-forward award name within a week ---
+  // The CSV format often has Award on first row, then blank Award cells for additional winners.
+  // --- Build awards: ONE winner per award per week ---
+aRows.forEach(r => {
+  const week = (aIdx.week >= 0) ? (r[aIdx.week] || "").trim() : "";
+  const owner = (aIdx.owner >= 0) ? (r[aIdx.owner] || "").trim() : "";
+  const award = (aIdx.award >= 0) ? (r[aIdx.award] || "").trim() : "";
+  const detail = (aIdx.detail >= 0) ? (r[aIdx.detail] || "").trim() : "";
+  const value = (aIdx.value >= 0) ? (r[aIdx.value] || "").trim() : "";
+
+  // Only rows that DEFINE an award count
+  if (!week || !award || !owner) return;
+
+  const w = String(week);
+  const wk = ensureWeek(w);
+
+  wk.awards[award] = {
+    owners: new Set([owner]),
+    detail,
+    value
+  };
+});
+
+
+  // --- Payouts (per week) ---
+  (payoutData || []).forEach(p => {
+    const w = String(p.week);
+    const wk = ensureWeek(w);
+    wk.payouts.push({
+      label: p.payout_text,
+      owner: p.owner,
+      points: p.points
+    });
+  });
+
+  // --- Survivor eliminated (per week) ---
+  Object.entries(survivorData.eliminated || {}).forEach(([owner, week]) => {
+    const w = String(week);
+    const wk = ensureWeek(w);
+    wk.survivorEliminated.push(owner);
+  });
+
+  /* ---------- Summary Overview ---------- */
+  const summary = {};
+  const ensureOwner = (o) => {
+    if (!summary[o]) summary[o] = { payouts: 0, regression: 0, crawlspace: 0, clipboard: 0, eliminated: "—" };
+  };
+
+  (payoutData || []).forEach(p => {
+    ensureOwner(p.owner);
+    summary[p.owner].payouts += 1;
+  });
+
+  // Count awards off the *parsed weekMap* (not raw rows), so carry-forward winners count correctly.
+  Object.values(weekMap).forEach(wk => {
+    Object.keys(wk.awards).forEach(awardName => {
+      const entry = wk.awards[awardName];
+      Array.from(entry.owners).forEach(owner => {
+        ensureOwner(owner);
+        if (awardName.includes("Regression")) summary[owner].regression += 1;
+        if (awardName.includes("Crawlspace")) summary[owner].crawlspace += 1;
+        if (awardName.includes("Clipboard")) summary[owner].clipboard += 1;
+      });
+    });
+  });
+
+  Object.entries(survivorData.eliminated || {}).forEach(([owner, week]) => {
+    ensureOwner(owner);
+    summary[owner].eliminated = week;
+  });
+
+  (survivorData.remaining || []).forEach(owner => {
+    ensureOwner(owner);
+    summary[owner].eliminated = "Still Alive";
+  });
+
+  const summaryBody = document.querySelector("#weekly-summary-overview tbody");
+  summaryBody.innerHTML = "";
+  Object.entries(summary)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .forEach(([owner, s]) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${owner}</td>
+        <td>${s.payouts}</td>
+        <td>${s.eliminated}</td>
+        <td>${s.regression}</td>
+        <td>${s.crawlspace}</td>
+        <td>${s.clipboard}</td>
+      `;
+      summaryBody.appendChild(tr);
+    });
+  makeTableSortable(document.getElementById("weekly-summary-overview"));
+
+  /* ---------- Week Dropdown + Renderer ---------- */
+  const weekSelect = document.getElementById("week-select");
+  const awardList = document.getElementById("weekly-awards-list");
+
+  const weeks = Object.keys(weekMap).map(Number).sort((a, b) => b - a);
+
+  weekSelect.innerHTML = "";
+  weeks.forEach(w => {
+    const opt = document.createElement("option");
+    opt.value = w;
+    opt.textContent = `Week ${w}`;
+    weekSelect.appendChild(opt);
+  });
+
+  function renderWeek(weekNum) {
+    const w = String(weekNum);
+    const wk = weekMap[w] || { payouts: [], awards: {}, survivorEliminated: [] };
+
+    awardList.innerHTML = "";
+
+    // 1) payouts
+    wk.payouts.forEach(p => {
+      const li = document.createElement("li");
+      li.innerHTML = `💰 <strong>${p.label}:</strong> ${p.owner} (${p.points} pts)`;
+      awardList.appendChild(li);
+    });
+
+    // 2) awards
+    const awardNames = Object.keys(wk.awards);
+
+    // Optional: stable ordering for the 3 “named” awards first
+    const priority = (name) => {
+      if (name.includes("Regression")) return 1;
+      if (name.includes("Crawlspace")) return 2;
+      if (name.includes("Clipboard")) return 3;
+      return 10;
+    };
+    awardNames.sort((a, b) => priority(a) - priority(b) || a.localeCompare(b));
+
+    awardNames.forEach(name => {
+      const entry = wk.awards[name];
+      const winners = Array.from(entry.owners).join(", ");
+
+      const parts = [];
+      if (entry.detail) parts.push(entry.detail);
+      if (entry.value) parts.push(entry.value);
+      const suffix = parts.length ? ` <span class="muted">(${parts.join(" · ")})</span>` : "";
+
+      const li = document.createElement("li");
+      li.innerHTML = `<strong>${name}:</strong> ${winners}${suffix}`;
+      awardList.appendChild(li);
+    });
+
+    // 3) survivor eliminated
+    if (wk.survivorEliminated.length) {
+      const li = document.createElement("li");
+      li.innerHTML = `☠️ <strong>Survivor Eliminated:</strong> ${wk.survivorEliminated.join(", ")}`;
+      awardList.appendChild(li);
+    }
+
+    // If a week truly has nothing, show a friendly note (rare)
+    if (!wk.payouts.length && !awardNames.length && !wk.survivorEliminated.length) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="muted">No weekly awards or payouts recorded.</span>`;
+      awardList.appendChild(li);
+    }
+  }
+
+  if (weeks.length) {
+    weekSelect.value = weeks[0];
+    renderWeek(weeks[0]);
+  }
+
+  weekSelect.addEventListener("change", e => renderWeek(e.target.value));
+});
+</script>
+
+</body>
+</html>
