@@ -1,0 +1,57 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+develop-eggs/
+sdist/
+wheels/
+.eggs/
+
+# Environments
+.env
+.venv
+venv/
+env/
+ENV/
+
+# SAM build output
+.aws-sam/
+
+# Generated data (local dev output - never committed, matches the S3 data/
+# prefix that the Lambda will own once it exists)
+/league_history.csv
+/head_to_head_lifetime.csv
+/advanced_team_metrics.csv
+/all_time_records.csv
+/most_drafted_players.csv
+/weekly_efficiency_awards.csv
+/survivor_results.json
+/weekly_payout_winners.json
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.hypothesis/
+
+# IDE-specific files
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+ignore/

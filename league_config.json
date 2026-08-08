@@ -1,0 +1,31 @@
+{
+  "league_id": 885349,
+  "sport": "football",
+  "years": {
+    "start": 2013,
+    "end": 2025,
+    "box_score_start": 2019,
+    "current": 2025
+  },
+  "site": {
+    "title": "Who Dat League",
+    "subtitle": "None of us are as dumb as all of us"
+  },
+  "awards": {
+    "top_score": "🔥 The Regression Incoming Plaque",
+    "bottom_score": "🧱 The Razz Memorial Crawlspace Trophy",
+    "least_efficient": "🧠 Staniel's Should’ve Played My Bench Golden Clipboard"
+  },
+  "survivor": {
+    "last_elimination_week": 12
+  },
+  "lineup": {
+    "QB": 1,
+    "RB": 2,
+    "WR": 2,
+    "TE": 1,
+    "FLEX": 2,
+    "K": 1,
+    "D/ST": 1
+  }
+}
