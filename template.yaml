@@ -1,0 +1,230 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Who Dat League - data-generation Lambda + schedule (backend half of the
+  who-dat-infra stack). See DESIGN.md for the full architecture.
+
+  NOTE - this file is shared with who-dat-frontend's work (TODO-frontend.md):
+  this pass only adds the Lambda-side resources below (function, layer,
+  execution role, Secrets Manager secret, EventBridge Scheduler). The S3
+  site bucket itself (AWS::S3::Bucket + its public-read bucket policy +
+  WebsiteConfiguration) is intentionally NOT defined here - that's the
+  frontend agent's resource to add, per TODO-frontend.md's "Infrastructure"
+  section. Until that resource exists in this template, the bucket name is
+  supplied via the SiteBucketName parameter below instead of a same-template
+  !Ref, so this half of the stack can be built/reviewed independently. Once
+  the bucket resource lands here, SiteBucketName can stay a parameter (two
+  independently-deployable stacks) or get collapsed to a !Ref (one stack) -
+  a decision for whoever wires the two halves together, not made here.
+
+Parameters:
+  SiteBucketName:
+    Type: String
+    Description: >
+      Name of the S3 site bucket (defined in the frontend half of this
+      template - see the note above). Required because this template only
+      contains the Lambda-side resources and can't !Ref a bucket resource
+      that isn't declared here.
+
+  PandasLayerArn:
+    Type: String
+    Description: >
+      ARN of the AWS-managed AWSSDKPandas-Python311 layer for the target
+      region/account. This is intentionally NOT defaulted - the AWS-owned
+      publisher account ID and version number vary by region and change
+      over time, so a stale hardcoded default would silently ship the wrong
+      (or a since-deleted) layer version. Look up the current one for your
+      region with:
+        aws lambda list-layers --region <region> --compatible-runtime python3.11 \
+          --query "Layers[?LayerName=='AWSSDKPandas-Python311'].LatestMatchingVersion.LayerVersionArn"
+      or see https://docs.aws.amazon.com/lambda/latest/dg/python-package.html#python-package-sdk-pandas
+
+  EspnSwid:
+    Type: String
+    NoEcho: true
+    Description: >
+      ESPN "swid" session cookie (from ignore/espn_creds.json locally).
+      Supplied at deploy time (e.g. `sam deploy --parameter-overrides
+      EspnSwid=... EspnEspnS2=...`), never committed to git or defaulted
+      here.
+
+  EspnEspnS2:
+    Type: String
+    NoEcho: true
+    Description: ESPN "espn_s2" session cookie. Same handling as EspnSwid above.
+
+  FunctionName:
+    Type: String
+    Default: who-dat-data-generator
+    Description: >
+      Named explicitly (rather than left to CloudFormation's generated
+      name) so the IAM role's log-group-scoped policy below can reference
+      it without a circular dependency on the function's own ARN.
+
+Resources:
+  # --- Secrets Manager -----------------------------------------------
+  # ESPN credentials never go in S3 or git (see project memory / DESIGN.md
+  # decision #4) - Secrets Manager only. Values come from NoEcho parameters
+  # supplied at `sam deploy` time rather than a manual out-of-band
+  # `aws secretsmanager create-secret` call, so the whole stack (secret
+  # included) stands up from one `sam deploy`. NoEcho masks the values in
+  # the CloudFormation console/CLI output; they're still retrievable via
+  # secretsmanager:GetSecretValue by anyone with that IAM permission, same
+  # as a secret created any other way - that's expected, not a leak.
+  EspnCredsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${FunctionName}-espn-creds"
+      Description: ESPN swid/espn_s2 session cookies for the who-dat-infra data-generator Lambda.
+      SecretString: !Sub '{"swid":"${EspnSwid}","espn_s2":"${EspnEspnS2}"}'
+
+  # --- Lambda ----------------------------------------------------------
+  DataGeneratorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FunctionName}"
+      RetentionInDays: 90
+
+  DataGeneratorExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${FunctionName}-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteDataFiles
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # s3:PutObject scoped to exactly the 8 files the Lambda
+              # writes (DESIGN.md decision #7's table) - NOT a bucket-wide
+              # or prefix wildcard. The bucket root is a flat namespace
+              # shared with index.html/style.css/league_config.json (which
+              # this Lambda never writes), so prefix scoping can't
+              # distinguish them; only an explicit key list can.
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/league_history.csv"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/head_to_head_lifetime.csv"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/advanced_team_metrics.csv"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/all_time_records.csv"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/most_drafted_players.csv"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/weekly_efficiency_awards.csv"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/survivor_results.json"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/weekly_payout_winners.json"
+        - PolicyName: ReadConfig
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Config-source decision (DESIGN.md decision #4 / TODO-backend.md):
+              # league_config.json is read from the bucket root - the same
+              # public object the frontend deploy step publishes for the
+              # browser to fetch, so there's one copy, not two. owner_map.json
+              # and weekly_payouts_config.json (not front-end-facing) live
+              # under a separate config/ prefix in the same bucket.
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/league_config.json"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/config/owner_map.json"
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/config/weekly_payouts_config.json"
+        - PolicyName: ReadEspnCreds
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref EspnCredsSecret
+        - PolicyName: WriteOwnLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:*
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FunctionName}:*"
+
+  DataGeneratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: >
+        Weekly regeneration of the Who Dat League site's CSV/JSON data files
+        from ESPN. See DESIGN.md and TODO-backend.md.
+      CodeUri: ./
+      Handler: lambda_function.handler
+      Runtime: python3.11
+      Architectures:
+        - x86_64
+      # Generous starting point per TODO-backend.md - tune down once real
+      # runtime is measured (see TODO-backend.md "Testing"); 900s is the
+      # Lambda hard cap, so this leaves no further headroom to grow into
+      # without the season-cache optimization (DESIGN.md decision #5).
+      Timeout: 900
+      # pandas + a full multi-year ESPN history in memory at once needs
+      # more than the 128-512MB default; 1024MB is a starting point, not a
+      # measured figure - revisit alongside the timeout once a real run has
+      # been profiled.
+      MemorySize: 1024
+      Role: !GetAtt DataGeneratorExecutionRole.Arn
+      Layers:
+        - !Ref PandasLayerArn
+      Environment:
+        Variables:
+          WHO_DAT_CONFIG_BACKEND: s3
+          WHO_DAT_SITE_BUCKET: !Ref SiteBucketName
+          WHO_DAT_CONFIG_PREFIX: config/
+          WHO_DAT_ESPN_SECRET_NAME: !Ref EspnCredsSecret
+    DependsOn: DataGeneratorLogGroup
+
+  # --- EventBridge Scheduler --------------------------------------------
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${FunctionName}-scheduler-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeDataGeneratorLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt DataGeneratorFunction.Arn
+
+  WeeklyDataRefreshSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${FunctionName}-weekly"
+      Description: >
+        Weekly trigger, in-season. PLACEHOLDER: Tuesday 09:00 America/Chicago
+        (after Monday Night Football) - confirm the exact day/time with
+        Morrie before relying on this in prod (TODO-backend.md).
+      ScheduleExpression: "cron(0 9 ? * TUE *)"
+      ScheduleExpressionTimezone: America/Chicago
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: ENABLED
+      Target:
+        Arn: !GetAtt DataGeneratorFunction.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+
+Outputs:
+  DataGeneratorFunctionArn:
+    Description: ARN of the data-generator Lambda.
+    Value: !GetAtt DataGeneratorFunction.Arn
+
+  EspnCredsSecretArn:
+    Description: ARN of the ESPN creds secret (for manual inspection/rotation).
+    Value: !Ref EspnCredsSecret
