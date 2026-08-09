@@ -116,6 +116,27 @@ Docker build step, faster iteration.
 - ESPN `swid`/`espn_s2` cookies: real session credentials. These go in **Secrets Manager**, never
   alongside public site data in S3.
 
+**Decided (backend build): S3 config prefix, not the EventBridge payload.** Concretely:
+
+- The Lambda's own `league_config.json` input is read from `s3://<site-bucket>/league_config.json` —
+  the exact same object the frontend deploy step publishes for the browser to fetch (see decision #7).
+  One object, two consumers, no separate Lambda-only copy to keep in sync.
+- `owner_map.json` and `weekly_payouts_config.json` live under a `config/` prefix in the same bucket
+  (`s3://<site-bucket>/config/owner_map.json`, `.../config/weekly_payouts_config.json`) rather than in
+  the EventBridge Scheduler's invocation payload. Reasons: (1) EventBridge Scheduler input is a fixed
+  JSON blob baked into the schedule resource itself, so changing config (a new season's payout rules,
+  a roster change to `owner_map.json`) would mean a template/stack update instead of a plain `aws s3
+  cp`; (2) the Lambda already needs S3 read access for `league_config.json` per the point above, so
+  granting `s3:GetObject` on two more keys in the same bucket is a marginal addition, not a new
+  mechanism; (3) it keeps `lambda_function.py`'s `event`/`context` params unused, so the same handler
+  can be invoked identically from the schedule, the console, or the CLI with no payload to remember.
+  The frontend bucket policy makes the whole bucket public-read anyway (see TODO-frontend.md), so
+  "private prefix" here is organizational, not an actual access boundary — consistent with these two
+  files already being "not sensitive" above.
+- `who_dat/config.py` implements this as an S3+Secrets-Manager backend selected by one env var
+  (`WHO_DAT_CONFIG_BACKEND=s3`, set on the Lambda in `template.yaml`), alongside — not replacing — the
+  local-file backend local scripts already use (`WHO_DAT_CONFIG_BACKEND` defaults to `"local"`).
+
 ### 5. Avoid re-fetching the entire league history every run
 
 The original scripts re-fetch *every* configured year from ESPN on every run. Once a season ends its
