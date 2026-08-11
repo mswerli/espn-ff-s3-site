@@ -16,8 +16,13 @@ that's built (Phase 3+ in DESIGN.md). Nothing is deployed to AWS yet -
 1. Install dependencies (Python 3.9+):
 
    ```
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    ```
+
+   (`requirements.txt` alone is what `sam build` packages into the Lambda - deliberately just
+   `espn-api`, no `pandas`, since the deployed Lambda gets pandas from the `AWSSDKPandas-Python311`
+   layer instead, see DESIGN.md decision #3. `requirements-dev.txt` adds `pandas` on top, for
+   running `scripts/*.py` locally.)
 
 2. Credentials and owner map (gitignored, not secret-free):
 

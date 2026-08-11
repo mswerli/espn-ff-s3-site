@@ -97,6 +97,19 @@ public layer (`AWSSDKPandas-Python31x`) with pandas + numpy prebuilt. `espn_api`
 Python/`requests` and small. So: a normal zip-based Lambda plus that one managed layer — no ECR, no
 Docker build step, faster iteration.
 
+This means the repo-root `requirements.txt` that `sam build` packages into the Lambda **must not**
+list pandas: `sam build`'s default Python builder reads exactly `requirements.txt` (no template
+option to point it elsewhere short of a custom Makefile build step, which is more machinery than this
+needs) and `pip install`s it straight into `/var/task`, on top of what the layer already provides at
+`/opt/python`. Bundling pandas there too caused two real problems, not a hypothetical one: pandas'
+unpinned `numpy>=1.23.2` floor let `pip` resolve to whatever the newest numpy release was on a given
+day, and one such day that release had no linux/cp311 wheel yet, breaking `sam build` outright; and
+even when the resolve succeeds, AWS's docs say deployment-package versions shadow layer versions on
+the import path, so a bundled pandas would silently win over the layer's pandas rather than the layer
+actually being used — defeating the entire point of this decision. Fix: `requirements.txt` lists only
+`espn-api`; a separate `requirements-dev.txt` (`-r requirements.txt` plus `pandas`) is what local
+dev/`scripts/*.py` install instead, since local runs have no Lambda layer supplying pandas for them.
+
 ### 4. Config vs. secrets are split — and `league_config.json` specifically is public
 
 - `league_config.json` is no longer Lambda-input-only: `site/index.html` now fetches it directly
@@ -238,7 +251,8 @@ who-dat-infra/
   who_dat/                # shared report-building code (see above)
   lambda_function.py      # Lambda entrypoint
   scripts/                # local CLI wrappers
-  requirements.txt         # pinned espn_api, pandas
+  requirements.txt         # what `sam build` packages into the Lambda — espn_api only, no pandas (decision #3)
+  requirements-dev.txt     # local dev only — requirements.txt + pandas, not read by `sam build`
   Makefile                 # sam build/deploy + s3 sync targets
 ```
 

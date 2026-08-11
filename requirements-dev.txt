@@ -1,0 +1,14 @@
+# Local development only - NOT read by `sam build` (which reads exactly
+# requirements.txt, see the comment there). Install this for
+# scripts/*.py / who_dat/reports/*.py, which import pandas directly and
+# have no Lambda layer supplying it locally:
+#
+#   pip install -r requirements-dev.txt
+#
+-r requirements.txt
+pandas==2.3.1
+
+# Uncomment to exercise who_dat/config.py's S3 + Secrets Manager backend
+# (WHO_DAT_CONFIG_BACKEND=s3) outside of Lambda - not needed for anything
+# else in local dev, see requirements.txt's comment on boto3.
+# boto3

@@ -9,8 +9,14 @@ Execution checklist for the Lambda that regenerates the site's CSV/JSON data. Ra
       functions, plus `who_dat/espn_client.py` (retry/backoff) and `who_dat/config.py`
       (local-file config/creds loading) — verified byte-identical output vs. the original scripts
       (commit `8368d2f`)
-- [x] `requirements.txt` pinned (`espn-api==0.45.1`, `pandas==2.3.1` — **don't loosen `espn-api`
-      without retesting bye-week handling in `advanced_history.py`**, see project memory)
+- [x] `requirements.txt` pinned (`espn-api==0.45.1` — **don't loosen `espn-api` without retesting
+      bye-week handling in `advanced_history.py`**, see project memory). `pandas==2.3.1` lives in
+      `requirements-dev.txt` instead, not `requirements.txt`: `sam build` packages exactly
+      `requirements.txt` into the Lambda, and pandas belongs to the `AWSSDKPandas-Python311` layer
+      there (DESIGN.md decision #3) — bundling it too broke `sam build` outright (pandas' unpinned
+      `numpy` floor resolved to a version with no linux/cp311 wheel yet) and would have shadowed the
+      layer's pandas even on days it didn't. `requirements-dev.txt` (`-r requirements.txt` + pandas)
+      is what local dev/`scripts/*.py` install instead.
 - [x] `scripts/run_all.py` + thin CLI wrappers for local runs
 
 ## Lambda handler
