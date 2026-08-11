@@ -17,6 +17,18 @@ Execution checklist for the Lambda that regenerates the site's CSV/JSON data. Ra
       `numpy` floor resolved to a version with no linux/cp311 wheel yet) and would have shadowed the
       layer's pandas even on days it didn't. `requirements-dev.txt` (`-r requirements.txt` + pandas)
       is what local dev/`scripts/*.py` install instead.
+- [x] `sam build` packaging fixed to not ship `ignore/` (real ESPN creds) or anything else
+      non-runtime into the Lambda deployment package: `CodeUri: ./` means `sam build`'s CopySource
+      step covers the whole repo root by default, and a `.samignore` file does **not** work around
+      that (tried it, verified via an actual `sam build` that it has no effect on this SAM CLI
+      version's Python build workflow — see DESIGN.md decision #3). Fixed with
+      `Metadata: BuildMethod: makefile` on `DataGeneratorFunction` + a `build-DataGeneratorFunction`
+      target in the repo-root `Makefile` that explicitly allow-lists what gets copied
+      (`lambda_function.py`, `who_dat/`, `requirements.txt`'s pip deps) instead of trying to deny-list
+      everything that must NOT ship. Verified: `sam build` succeeds and the resulting
+      `.aws-sam/build/DataGeneratorFunction/` contains none of `ignore/`, `site/`, `scripts/`,
+      `config/`, `league_config.json`, docs, `.git/`, `.venv/`, `.claude/` — checked both by directory
+      listing and by grepping the whole build output for fragments of the real ESPN cookies.
 - [x] `scripts/run_all.py` + thin CLI wrappers for local runs
 
 ## Lambda handler

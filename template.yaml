@@ -181,6 +181,21 @@ Resources:
           WHO_DAT_CONFIG_PREFIX: config/
           WHO_DAT_ESPN_SECRET_NAME: !Ref EspnCredsSecret
     DependsOn: DataGeneratorLogGroup
+    Metadata:
+      # CodeUri is the whole repo root (lambda_function.py lives there per
+      # DESIGN.md's target layout), and that root also holds ignore/ - real
+      # ESPN swid/espn_s2 session cookies. sam build's default Python
+      # builder has no user-configurable exclude list (its CopySource step
+      # only skips a small hardcoded set - .git, .venv, __pycache__, etc -
+      # and does NOT read a .samignore file, despite that being documented
+      # as a general SAM CLI feature elsewhere; confirmed empirically and
+      # by reading aws_lambda_builders' python_pip workflow source in this
+      # SAM CLI version). So: a custom Makefile build (this Metadata block
+      # + the Makefile at the repo root) with an explicit allow-list of
+      # what to copy, instead of trying to deny-list everything that must
+      # NOT ship - a deny-list only protects against files someone
+      # remembered to add to it.
+      BuildMethod: makefile
 
   # --- EventBridge Scheduler --------------------------------------------
   SchedulerExecutionRole:

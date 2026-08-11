@@ -98,17 +98,45 @@ Python/`requests` and small. So: a normal zip-based Lambda plus that one managed
 Docker build step, faster iteration.
 
 This means the repo-root `requirements.txt` that `sam build` packages into the Lambda **must not**
-list pandas: `sam build`'s default Python builder reads exactly `requirements.txt` (no template
-option to point it elsewhere short of a custom Makefile build step, which is more machinery than this
-needs) and `pip install`s it straight into `/var/task`, on top of what the layer already provides at
-`/opt/python`. Bundling pandas there too caused two real problems, not a hypothetical one: pandas'
-unpinned `numpy>=1.23.2` floor let `pip` resolve to whatever the newest numpy release was on a given
-day, and one such day that release had no linux/cp311 wheel yet, breaking `sam build` outright; and
-even when the resolve succeeds, AWS's docs say deployment-package versions shadow layer versions on
-the import path, so a bundled pandas would silently win over the layer's pandas rather than the layer
-actually being used — defeating the entire point of this decision. Fix: `requirements.txt` lists only
-`espn-api`; a separate `requirements-dev.txt` (`-r requirements.txt` plus `pandas`) is what local
-dev/`scripts/*.py` install instead, since local runs have no Lambda layer supplying pandas for them.
+list pandas: `sam build`'s default Python builder reads exactly `requirements.txt` and `pip install`s
+it straight into `/var/task`, on top of what the layer already provides at `/opt/python`. Bundling
+pandas there too caused two real problems, not a hypothetical one: pandas' unpinned `numpy>=1.23.2`
+floor let `pip` resolve to whatever the newest numpy release was on a given day, and one such day that
+release had no linux/cp311 wheel yet, breaking `sam build` outright; and even when the resolve
+succeeds, AWS's docs say deployment-package versions shadow layer versions on the import path, so a
+bundled pandas would silently win over the layer's pandas rather than the layer actually being used —
+defeating the entire point of this decision. Fix: `requirements.txt` lists only `espn-api`; a separate
+`requirements-dev.txt` (`-r requirements.txt` plus `pandas`) is what local dev/`scripts/*.py` install
+instead, since local runs have no Lambda layer supplying pandas for them.
+
+**A second, more serious packaging problem surfaced once `sam build` actually succeeded**: `CodeUri`
+is the whole repo root (`lambda_function.py` lives there per the target layout below), and the repo
+root also holds `ignore/` — real ESPN `swid`/`espn_s2` session cookies. `sam build`'s default Python
+builder has no working user-configurable exclude for its CopySource step: it only skips a small
+hardcoded list (`.git`, `.venv`, `__pycache__`, etc.), and — despite general SAM CLI docs describing a
+`.samignore` file as the way to add more exclusions — that support does not actually exist in the
+Python pip build workflow shipped in the AWS SAM CLI version this was verified against (confirmed by
+reading `aws_lambda_builders`' source directly, not just by a failed test: the `CopySourceAction` class
+does take an `excludes` list, but the Python pip workflow only ever passes its own hardcoded
+`EXCLUDED_FILES` tuple, never anything read from a `.samignore` file). A `.samignore` at the repo root
+was tried first and confirmed, via an actual `sam build`, to have **no effect** —
+`ignore/espn_creds.json` still landed in `.aws-sam/build/DataGeneratorFunction/`, which is exactly what
+`sam deploy` zips and uploads, directly violating this same decision's "Secrets Manager, never
+alongside public site data in S3" further down. (`.samignore` may well do something for other language
+workflows/build methods in other SAM CLI versions — it just isn't this one, for this workflow — so
+don't assume it works without testing against the actual `sam build` output again if this changes.)
+
+The fix that actually works: `template.yaml`'s `DataGeneratorFunction` sets
+`Metadata: BuildMethod: makefile`, and the repo-root `Makefile` has a `build-DataGeneratorFunction`
+target that copies `lambda_function.py` + `who_dat/` and `pip install`s `requirements.txt` into
+`$ARTIFACTS_DIR` explicitly — an **allow-list**, not a deny-list. Nothing else in the repo (`ignore/`,
+`site/`, `scripts/`, `config/`, `league_config.json`, docs, `.git/`, `.venv/`, ...) is ever a build
+input candidate, regardless of what gets added to the repo later — the opposite failure mode of a
+deny-list, which only protects against files someone remembered to add to it. Verified: `sam build`
+with this in place produces an artifact directory containing only `lambda_function.py`, `who_dat/`,
+and `requirements.txt`'s installed dependencies — confirmed by grepping the entire build output for
+fragments of the real ESPN cookies and finding none, and by `find`ing for `ignore/`, `site/`,
+`scripts/`, `.git`, `.venv`, `.claude` anywhere under `.aws-sam/build/` and finding nothing.
 
 ### 4. Config vs. secrets are split — and `league_config.json` specifically is public
 
@@ -253,7 +281,8 @@ who-dat-infra/
   scripts/                # local CLI wrappers
   requirements.txt         # what `sam build` packages into the Lambda — espn_api only, no pandas (decision #3)
   requirements-dev.txt     # local dev only — requirements.txt + pandas, not read by `sam build`
-  Makefile                 # sam build/deploy + s3 sync targets
+  Makefile                 # build-DataGeneratorFunction (SAM's custom build hook, decision #3) +
+                            # sam build/deploy + s3 sync convenience targets (TODO-frontend.md)
 ```
 
 ## Rollout phases
