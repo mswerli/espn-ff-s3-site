@@ -13,18 +13,34 @@ Rationale lives in [DESIGN.md](DESIGN.md); this is just the ordered work. Compan
 - [x] `league_config.json`'s public-readability requirement identified and resolved in the design
       (decision #4) — canonical file stays at the repo root (matching `who_dat/config.py`); the
       deploy step copies it to the bucket root explicitly rather than moving it into `site/`
+- [x] Sample-data banner + temporary data source (2026-08-11): `site/index.html` now shows a visible
+      "sample data" notice, and all 9 `fetch()` calls go through a `dataUrl()` helper pointed at
+      `DATA_BASE_URL` — currently the scratch S3 bucket from backend testing
+      (`who-dat-league-scratch-217412666418`, us-west-2), made public read-only for exactly the 9
+      files the page fetches (`config/*` stays private) plus a permissive CORS rule so a locally
+      previewed page can fetch it cross-origin. **Must be reset to `DATA_BASE_URL = ""` once the real
+      site bucket exists and the Lambda is syncing it** (the checklist item below) — this is
+      explicitly a temporary stand-in, not the real hosting, and the scratch bucket's public policy
+      should arguably come back down once it's no longer needed for this.
 
 ## Infrastructure (`template.yaml` — bucket-side resources; Lambda-side resources are in TODO-backend.md)
 
-- [ ] S3 bucket resource: static `WebsiteConfiguration` (index document `index.html`; an error
-      document isn't decided yet — worth picking one so a missing page doesn't just show S3's raw
-      XML error)
-- [ ] Bucket policy: public `s3:GetObject` on the whole bucket (no CloudFront/OAC needed, per
+- [x] S3 bucket resource: static `WebsiteConfiguration` (index document `index.html`; error
+      document decided as reusing `index.html` too — no dedicated error page exists, this is a
+      one-page app, see DESIGN.md decision #1)
+- [x] Bucket policy: public `s3:GetObject` on the whole bucket (no CloudFront/OAC needed, per
       decision #1)
-- [ ] Explicitly disable the relevant Block Public Access settings for this bucket in the template —
+- [x] Explicitly disable the relevant Block Public Access settings for this bucket in the template —
       S3 defaults block public bucket policies, so the bucket policy above won't take effect without this
-- [ ] SAM template `Outputs`: website endpoint URL, bucket name (so the deploy script has something
-      to target)
+      (`BlockPublicPolicy`/`RestrictPublicBuckets` set `false`; `BlockPublicAcls`/`IgnorePublicAcls`
+      left `true` since this bucket never uses ACLs, only the bucket policy)
+- [x] SAM template `Outputs`: website endpoint URL, bucket name (so the deploy script has something
+      to target) — `SiteBucketWebsiteURL` / `SiteBucketNameOutput`
+- [ ] Once the real site bucket is deployed and synced: reset `site/index.html`'s `DATA_BASE_URL` to
+      `""` (back to same-origin relative fetches, decision #7) and remove/repurpose the sample-data
+      banner; also reconsider whether `who-dat-league-scratch-217412666418`'s public bucket
+      policy/CORS (added for the sample-data banner, see "Done" above) should be taken back down at
+      that point, since it'll no longer be needed for this
 
 ## Deploy tooling
 
@@ -67,3 +83,9 @@ Rationale lives in [DESIGN.md](DESIGN.md); this is just the ordered work. Compan
       missing/failed file just silently leaves a table empty. Worth a "data last updated" indicator
       or a visible error state once the pipeline is live and a failure becomes an unattended-Lambda
       risk rather than a "did I forget to copy the file up" one.
+- [ ] **Breaking, flagged by the backend's multi-league work (DESIGN.md decision #12, TODO-backend.md
+      "Multi-league support"):** once the Lambda partitions its outputs under `leagues/<league_id>/`,
+      `index.html`'s bare-filename `fetch("league_history.csv")`-style calls (decision #7's table) stop
+      resolving. Needs a front-end answer — a league picker, a query-string/subpath league selector, a
+      per-league `site/` deploy, etc. — not designed by the backend side; not urgent until decision #12
+      actually ships (still single-league today).

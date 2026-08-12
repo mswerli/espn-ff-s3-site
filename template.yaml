@@ -4,27 +4,28 @@ Description: >
   Who Dat League - data-generation Lambda + schedule (backend half of the
   who-dat-infra stack). See DESIGN.md for the full architecture.
 
-  NOTE - this file is shared with who-dat-frontend's work (TODO-frontend.md):
-  this pass only adds the Lambda-side resources below (function, layer,
-  execution role, Secrets Manager secret, EventBridge Scheduler). The S3
-  site bucket itself (AWS::S3::Bucket + its public-read bucket policy +
-  WebsiteConfiguration) is intentionally NOT defined here - that's the
-  frontend agent's resource to add, per TODO-frontend.md's "Infrastructure"
-  section. Until that resource exists in this template, the bucket name is
-  supplied via the SiteBucketName parameter below instead of a same-template
-  !Ref, so this half of the stack can be built/reviewed independently. Once
-  the bucket resource lands here, SiteBucketName can stay a parameter (two
-  independently-deployable stacks) or get collapsed to a !Ref (one stack) -
-  a decision for whoever wires the two halves together, not made here.
+  NOTE - this file is shared between who-dat-backend and who-dat-frontend's
+  work (TODO-backend.md / TODO-frontend.md). The Lambda-side resources
+  (function, layer, execution role, Secrets Manager secret, EventBridge
+  Scheduler) are backend's; the S3 site bucket, its public-read bucket
+  policy, WebsiteConfiguration, and Block Public Access settings (see the
+  "Static site bucket" section below) are frontend's, per TODO-frontend.md's
+  "Infrastructure" section. Collapsed into one stack: the bucket resource's
+  BucketName is !Ref SiteBucketName, the same parameter the Lambda-side IAM
+  policies already !Sub-reference, so both halves resolve to the same bucket
+  name without the Lambda-side resources needing to change at all.
 
 Parameters:
   SiteBucketName:
     Type: String
     Description: >
-      Name of the S3 site bucket (defined in the frontend half of this
-      template - see the note above). Required because this template only
-      contains the Lambda-side resources and can't !Ref a bucket resource
-      that isn't declared here.
+      Name of the S3 site bucket. Also used as this template's
+      AWS::S3::Bucket resource's explicit BucketName (see the "Static site
+      bucket" section below) - a Parameter rather than letting
+      CloudFormation generate the name so the Lambda-side IAM policies below
+      (which predate the bucket resource) and the deploy-time
+      `aws s3 sync`/`cp` commands can all reference a stable, predictable
+      name. Must be globally unique across all of S3.
 
   PandasLayerArn:
     Type: String
@@ -62,6 +63,45 @@ Parameters:
       it without a circular dependency on the function's own ARN.
 
 Resources:
+  # --- Static site bucket (frontend-owned; TODO-frontend.md "Infrastructure") ----
+  # Plain S3 static website hosting, no CloudFront/OAC (DESIGN.md decision #1) -
+  # public HTTP endpoint, public-read bucket policy below instead of signed
+  # URLs/a CDN origin access control.
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref SiteBucketName
+      # ErrorDocument: no dedicated error page exists yet (not decided as of
+      # this pass) - reusing index.html means a missing/mistyped path still
+      # renders the app shell (which then just shows empty tables) instead of
+      # S3's raw XML error output. Worth revisiting if a real 404 page is
+      # ever wanted; noted in DESIGN.md.
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      # Bucket policy (below) grants public s3:GetObject - that's a bucket
+      # *policy*, not an ACL, so only BlockPublicPolicy/RestrictPublicBuckets
+      # need to be turned off. BlockPublicAcls/IgnorePublicAcls stay on
+      # (the account-level default) since this bucket never uses ACLs.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${SiteBucket}/*"
+
   # --- Secrets Manager -----------------------------------------------
   # ESPN credentials never go in S3 or git (see project memory / DESIGN.md
   # decision #4) - Secrets Manager only. Values come from NoEcho parameters
@@ -236,6 +276,21 @@ Resources:
         RoleArn: !GetAtt SchedulerExecutionRole.Arn
 
 Outputs:
+  SiteBucketWebsiteURL:
+    Description: >
+      Public HTTP endpoint for the static site (S3 website hosting, no
+      HTTPS - DESIGN.md decision #1). This is what a browser/curl hits, and
+      what README.md should point at.
+    Value: !GetAtt SiteBucket.WebsiteURL
+
+  SiteBucketNameOutput:
+    Description: >
+      Name of the S3 site bucket - same value as the SiteBucketName
+      parameter, exposed as a stack output so deploy scripts can look it up
+      via `sam list stack-outputs` / `aws cloudformation describe-stacks`
+      instead of hardcoding it.
+    Value: !Ref SiteBucket
+
   DataGeneratorFunctionArn:
     Description: ARN of the data-generator Lambda.
     Value: !GetAtt DataGeneratorFunction.Arn

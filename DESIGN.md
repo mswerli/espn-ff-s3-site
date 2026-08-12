@@ -70,6 +70,12 @@ HTTPS requirement. This drops CloudFront, ACM, and Route 53 entirely, which is m
 infrastructure complexity a hobby fantasy-football site doesn't need. If HTTPS/a custom domain is
 wanted later, CloudFront-in-front-of-S3 is a additive change, not a redesign.
 
+`WebsiteConfiguration`'s `ErrorDocument` reuses `index.html` (same as `IndexDocument`) rather than a
+dedicated error page — none was designed, and this is a one-page app anyway (tab-based navigation,
+no real sub-paths), so a missing/mistyped path re-rendering the same app shell is a reasonable
+default. A hard 404 or a small custom error page is a cheap follow-up if it's ever wanted (`site/`
+would just need one more file and `template.yaml`'s `ErrorDocument` a one-line change).
+
 ### 2. AWS SAM for all infrastructure, including the bucket
 
 SAM templates are CloudFormation underneath, so `template.yaml` declares everything in one stack:
