@@ -1,11 +1,12 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Who Dat League - data-generation Lambda + schedule (backend half of the
-  who-dat-infra stack). See DESIGN.md for the full architecture.
+  ESPN fantasy football site - data-generation Lambda + schedule (backend
+  half of the espn-ff-s3-site stack). See DESIGN.md for the full
+  architecture.
 
-  NOTE - this file is shared between who-dat-backend and who-dat-frontend's
-  work (TODO-backend.md / TODO-frontend.md). The Lambda-side resources
+  NOTE - this file is shared between the backend and frontend halves of
+  the work (TODO-backend.md / TODO-frontend.md). The Lambda-side resources
   (function, layer, execution role, Secrets Manager secret, EventBridge
   Scheduler) are backend's; the S3 site bucket, its public-read bucket
   policy, WebsiteConfiguration, and Block Public Access settings (see the
@@ -56,11 +57,15 @@ Parameters:
 
   FunctionName:
     Type: String
-    Default: who-dat-data-generator
+    Default: espn-ff-data-generator
     Description: >
       Named explicitly (rather than left to CloudFormation's generated
       name) so the IAM role's log-group-scoped policy below can reference
       it without a circular dependency on the function's own ARN.
+
+      Changing this default is a CloudFormation *replacement* (recreates the
+      function, its role, log group, and the espn-creds secret name below) -
+      don't change it as a side effect of a routine deploy.
 
 Resources:
   # --- Static site bucket (frontend-owned; TODO-frontend.md "Infrastructure") ----
@@ -115,7 +120,7 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub "${FunctionName}-espn-creds"
-      Description: ESPN swid/espn_s2 session cookies for the who-dat-infra data-generator Lambda.
+      Description: ESPN swid/espn_s2 session cookies for the espn-ff-s3-site data-generator Lambda.
       SecretString: !Sub '{"swid":"${EspnSwid}","espn_s2":"${EspnEspnS2}"}'
 
   # --- Lambda ----------------------------------------------------------
@@ -194,7 +199,7 @@ Resources:
     Properties:
       FunctionName: !Ref FunctionName
       Description: >
-        Weekly regeneration of the Who Dat League site's CSV/JSON data files
+        Weekly regeneration of the league site's CSV/JSON data files
         from ESPN. See DESIGN.md and TODO-backend.md.
       CodeUri: ./
       Handler: lambda_function.handler
@@ -216,10 +221,10 @@ Resources:
         - !Ref PandasLayerArn
       Environment:
         Variables:
-          WHO_DAT_CONFIG_BACKEND: s3
-          WHO_DAT_SITE_BUCKET: !Ref SiteBucketName
-          WHO_DAT_CONFIG_PREFIX: config/
-          WHO_DAT_ESPN_SECRET_NAME: !Ref EspnCredsSecret
+          FF_CONFIG_BACKEND: s3
+          FF_SITE_BUCKET: !Ref SiteBucketName
+          FF_CONFIG_PREFIX: config/
+          FF_ESPN_SECRET_NAME: !Ref EspnCredsSecret
     DependsOn: DataGeneratorLogGroup
     Metadata:
       # CodeUri is the whole repo root (lambda_function.py lives there per

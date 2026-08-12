@@ -1,4 +1,4 @@
-"""Thin local CLI wrapper around who_dat.reports.records. Writes
+"""Thin local CLI wrapper around league_reports.reports.records. Writes
 all_time_records.csv to the project root."""
 import sys
 from pathlib import Path
@@ -6,8 +6,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from who_dat.config import get_credentials, get_league_config, output_path, year_range
-from who_dat.reports.records import build_records
+from league_reports.config import get_credentials, get_league_config, output_path, year_range
+from league_reports.reports.records import build_records
 
 
 def main():

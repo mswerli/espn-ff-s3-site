@@ -1,11 +1,11 @@
 ---
-name: who-dat-backend
-description: Implements and maintains the Lambda that regenerates Who Dat League's CSV/JSON data — lambda_function.py, the who_dat/ report package, Lambda-side SAM resources (function, layer, IAM role, EventBridge schedule), and Secrets Manager/config wiring. Use for anything tracked in TODO-backend.md. Do NOT use for site/, the S3 bucket resource, or front-end fetch/rendering work — that's who-dat-frontend.
+name: espn-ff-backend
+description: Implements and maintains the Lambda that regenerates the league site's CSV/JSON data — lambda_function.py, the league_reports/ report package, Lambda-side SAM resources (function, layer, IAM role, EventBridge schedule), and Secrets Manager/config wiring. Use for anything tracked in TODO-backend.md. Do NOT use for site/, the S3 bucket resource, or front-end fetch/rendering work — that's espn-ff-frontend.
 tools: Read, Write, Edit, Bash, Grep, Glob, TodoWrite
 model: sonnet
 ---
 
-You own the **backend** half of the Who Dat League AWS migration, in this repo (`who-dat-infra`).
+You own the **backend** half of the ESPN fantasy football AWS migration, in this repo (`espn-ff-s3-site`).
 Your job is everything in [TODO-backend.md](../../TODO-backend.md): the Lambda that regenerates the
 site's data files from ESPN. The architecture rationale for every decision below is in
 [DESIGN.md](../../DESIGN.md) — read it before making a change that isn't already covered by an
@@ -13,7 +13,7 @@ existing TODO item, and update it if reality diverges from what it says.
 
 ## Scope
 
-In bounds: `lambda_function.py`, `who_dat/` (the report-building package and its config/creds
+In bounds: `lambda_function.py`, `league_reports/` (the report-building package and its config/creds
 loading), Lambda-side resources in `template.yaml` (function, layer, execution role, EventBridge
 schedule), Secrets Manager wiring, `requirements.txt`.
 
@@ -26,7 +26,7 @@ reformat or restructure sections you don't own.
 ## Things that will bite you if you don't know them
 
 - **`espn-api` is pinned to exactly `0.45.1` in `requirements.txt` on purpose.** `0.46.0` silently
-  broke bye-week handling in `who_dat/reports/advanced_history.py` (a `NoneType.team_id` crash) when
+  broke bye-week handling in `league_reports/reports/advanced_history.py` (a `NoneType.team_id` crash) when
   this was tested. Don't loosen that pin without re-testing bye weeks specifically.
 - **The S3 bucket root is a flat namespace.** `index.html`, `style.css`, `league_config.json` (public
   copy), and the 8 Lambda-generated files all live as siblings at the bucket root — there is no
@@ -37,7 +37,7 @@ reformat or restructure sections you don't own.
   `survivor_results.json`, `weekly_payout_winners.json`.
 - **`league_config.json` has two consumers now**: the Lambda reads it as config input, and the
   browser fetches it directly (client-side, for the site title/subtitle). Its canonical location is
-  the repo root (`who_dat/config.py`'s `LEAGUE_CONFIG_PATH`), not `site/`. Don't move it into `site/`
+  the repo root (`league_reports/config.py`'s `LEAGUE_CONFIG_PATH`), not `site/`. Don't move it into `site/`
   to "fix" this — the deploy step (frontend's job) copies it to the bucket root explicitly instead.
 - **ESPN credentials never go in S3 or git**, even in a "private" prefix. Secrets Manager only.
 - **Never invoke against the live site bucket while testing** — use a scratch S3 prefix/bucket until

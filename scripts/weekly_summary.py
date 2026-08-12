@@ -1,4 +1,4 @@
-"""Thin local CLI wrapper around who_dat.reports.weekly_summary. Writes
+"""Thin local CLI wrapper around league_reports.reports.weekly_summary. Writes
 weekly_efficiency_awards.csv, survivor_results.json, and
 weekly_payout_winners.json to the project root."""
 import json
@@ -8,8 +8,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from who_dat.config import get_credentials, get_league_config, get_payouts_config, output_path
-from who_dat.reports.weekly_summary import (
+from league_reports.config import get_credentials, get_league_config, get_payouts_config, output_path
+from league_reports.reports.weekly_summary import (
     DEFAULT_AWARDS,
     build_survivor_results,
     build_weekly_efficiency,

@@ -1,16 +1,17 @@
-# who-dat-infra
+# espn-ff-s3-site
 
-Fantasy football league history site, mid-migration to AWS. See
+ESPN fantasy football league history site, mid-migration to AWS. See
 [DESIGN.md](DESIGN.md) for the target architecture (S3 static hosting + a
 scheduled Lambda that regenerates the data files) and the rollout plan.
 
 This repo has completed **Phase 1 (Prep)** and **Phase 2 (static hosting)**: the data-generation
-code has been ported into an importable `who_dat/` package, and the S3 site bucket is deployed and
-live at `http://who-dat-league-217412666418.s3-website-us-west-2.amazonaws.com` (stack
-`who-dat-infra`, region `us-west-2`), seeded with `site/` plus one-time manually-copied sample data
-(see TODO-frontend.md). `lambda_function.py` and its `template.yaml` resources are also built and
-deployed (Phase 3+, see TODO-backend.md for that work's status) - the weekly schedule exists, but
-its season-cache/multi-league refinements are still in progress there.
+code has been ported into an importable `league_reports/` package, and the S3 site bucket is
+deployed and live at `http://espn-ff-site-217412666418.s3-website-us-west-2.amazonaws.com` (stack
+`espn-ff-s3-site`, region `us-west-2`), seeded with
+`site/` plus one-time manually-copied sample data (see TODO-frontend.md). `lambda_function.py` and
+its `template.yaml` resources are also built and deployed (Phase 3+, see TODO-backend.md for that
+work's status) - the weekly schedule exists, but its season-cache/multi-league refinements are
+still in progress there.
 
 ## Local development
 
@@ -72,7 +73,7 @@ config/
   espn_creds.example.json      # template - copy to ignore/espn_creds.json
   owner_map.example.json       # template - copy to ignore/owner_map.json
 ignore/                      # gitignored: real creds + owner map
-who_dat/                     # shared report-building code
+league_reports/              # shared report-building code
   espn_client.py                # retry-wrapped League() construction
   config.py                     # local-file config/credential loading
   reports/
@@ -84,7 +85,7 @@ who_dat/                     # shared report-building code
     weekly_summary.py             # -> weekly_efficiency_awards.csv,
                                    #    survivor_results.json,
                                    #    weekly_payout_winners.json
-scripts/                     # thin local CLI wrappers around who_dat/
+scripts/                     # thin local CLI wrappers around league_reports/
   run_all.py                    # regenerates every data file
 site/                        # index.html / style.css - the site itself
 ```
@@ -93,6 +94,6 @@ site/                        # index.html / style.css - the site itself
 
 Per DESIGN.md's rollout phases, still open: the local-preview path is broken (see
 TODO-frontend.md's "Local dev fix" - step 5 above doesn't actually work as written yet, since
-`who_dat/config.py`'s `output_path()` writes to the repo root, not `site/`), a custom domain/HTTPS,
-CI to auto-sync `site/` on push, and (per TODO-backend.md) the season-cache optimization and
-multi-league partitioning.
+`league_reports/config.py`'s `output_path()` writes to the repo root, not `site/`), a custom
+domain/HTTPS, CI to auto-sync `site/` on push, and (per TODO-backend.md) the season-cache
+optimization and multi-league partitioning.

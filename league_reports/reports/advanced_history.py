@@ -4,7 +4,7 @@ from collections import defaultdict, Counter
 
 import pandas as pd
 
-from who_dat.espn_client import get_league
+from league_reports.espn_client import get_league
 
 
 def build_advanced_history(league_id, years, owner_map, swid, espn_s2):

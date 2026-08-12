@@ -5,7 +5,7 @@ from collections import defaultdict
 
 import pandas as pd
 
-from who_dat.espn_client import get_league
+from league_reports.espn_client import get_league
 
 DEFAULT_AWARDS = {
     "top_score": "🔥 The Regression Incoming Plaque",

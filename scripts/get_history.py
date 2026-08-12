@@ -1,14 +1,14 @@
-"""Thin local CLI wrapper around who_dat.reports.history. Writes
+"""Thin local CLI wrapper around league_reports.reports.history. Writes
 league_history.csv to the project root. All the actual logic lives in
-who_dat/ so the same code can run from a Lambda later."""
+league_reports/ so the same code can run from a Lambda later."""
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from who_dat.config import get_credentials, get_owner_map, get_league_config, output_path, year_range
-from who_dat.reports.history import build_history
+from league_reports.config import get_credentials, get_owner_map, get_league_config, output_path, year_range
+from league_reports.reports.history import build_history
 
 
 def main():

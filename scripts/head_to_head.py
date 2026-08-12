@@ -1,4 +1,4 @@
-"""Thin local CLI wrapper around who_dat.reports.head_to_head. Writes
+"""Thin local CLI wrapper around league_reports.reports.head_to_head. Writes
 head_to_head_lifetime.csv to the project root."""
 import sys
 from pathlib import Path
@@ -6,8 +6,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from who_dat.config import get_credentials, get_league_config, output_path, year_range
-from who_dat.reports.head_to_head import build_head_to_head
+from league_reports.config import get_credentials, get_league_config, output_path, year_range
+from league_reports.reports.head_to_head import build_head_to_head
 
 
 def main():

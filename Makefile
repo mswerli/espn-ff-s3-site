@@ -11,7 +11,7 @@
 # SAM docs describing it - confirmed by reading that package's source).
 #
 # So this target is an explicit ALLOW-list: only lambda_function.py,
-# who_dat/, and requirements.txt's pip dependencies get copied in - nothing
+# league_reports/, and requirements.txt's pip dependencies get copied in - nothing
 # else in the repo (ignore/, site/, scripts/, docs, .git, .venv, config/,
 # league_config.json, ...) is ever a candidate, regardless of what gets
 # added to the repo later. That's the opposite failure mode of a deny-list,
@@ -26,9 +26,9 @@
 # Architectures: [x86_64] if that ever changes.
 build-DataGeneratorFunction:
 	cp lambda_function.py "$(ARTIFACTS_DIR)/"
-	mkdir -p "$(ARTIFACTS_DIR)/who_dat"
-	cp -r who_dat/. "$(ARTIFACTS_DIR)/who_dat/"
-	find "$(ARTIFACTS_DIR)/who_dat" -name "__pycache__" -type d -prune -exec rm -rf {} +
+	mkdir -p "$(ARTIFACTS_DIR)/league_reports"
+	cp -r league_reports/. "$(ARTIFACTS_DIR)/league_reports/"
+	find "$(ARTIFACTS_DIR)/league_reports" -name "__pycache__" -type d -prune -exec rm -rf {} +
 	pip install \
 		-r requirements.txt \
 		--target "$(ARTIFACTS_DIR)" \
@@ -50,7 +50,7 @@ build-DataGeneratorFunction:
 # STACK_NAME/AWS_REGION default to this project's actual deployed stack -
 # override on the command line (e.g. `make sync-site STACK_NAME=other`) if
 # ever deploying a second stack (e.g. a scratch/staging one).
-STACK_NAME ?= who-dat-infra
+STACK_NAME ?= espn-ff-s3-site
 AWS_REGION ?= us-west-2
 
 # $BUCKET is looked up from the stack's Outputs (SiteBucketNameOutput)

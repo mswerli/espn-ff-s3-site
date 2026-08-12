@@ -1,6 +1,6 @@
 """Config/credential loading for local dev, and (below) for the Lambda.
 
-Report-building functions in who_dat/reports/ take plain values (league id,
+Report-building functions in league_reports/reports/ take plain values (league id,
 year range, owner map, credentials, ...) rather than reading config
 themselves - that's what lets the same report code run from a local CLI
 script (config from these local JSON files) and from a Lambda (config from
@@ -79,18 +79,18 @@ def year_range(config, span="full"):
 # prefix in the same bucket instead. ESPN swid/espn_s2 always come from
 # Secrets Manager, never S3.
 #
-# Backend selection is one env var, WHO_DAT_CONFIG_BACKEND ("local", the
+# Backend selection is one env var, FF_CONFIG_BACKEND ("local", the
 # default - the functions above - or "s3"), set by template.yaml on the
 # Lambda's environment. boto3 is only imported lazily, inside the functions
 # below, so local scripts/tests that never touch the S3 backend don't need
 # it installed (it isn't in requirements.txt - the Lambda runtime provides
 # it for free; local S3-backend testing needs `pip install boto3`).
 
-CONFIG_BACKEND = os.environ.get("WHO_DAT_CONFIG_BACKEND", "local")
-CONFIG_BUCKET = os.environ.get("WHO_DAT_SITE_BUCKET")  # required when backend == "s3"
-CONFIG_PREFIX = os.environ.get("WHO_DAT_CONFIG_PREFIX", "config/")  # owner_map.json, weekly_payouts_config.json
-LEAGUE_CONFIG_KEY = os.environ.get("WHO_DAT_LEAGUE_CONFIG_KEY", "league_config.json")  # bucket root - same object the front-end fetches
-ESPN_SECRET_NAME = os.environ.get("WHO_DAT_ESPN_SECRET_NAME")  # required when backend == "s3"
+CONFIG_BACKEND = os.environ.get("FF_CONFIG_BACKEND", "local")
+CONFIG_BUCKET = os.environ.get("FF_SITE_BUCKET")  # required when backend == "s3"
+CONFIG_PREFIX = os.environ.get("FF_CONFIG_PREFIX", "config/")  # owner_map.json, weekly_payouts_config.json
+LEAGUE_CONFIG_KEY = os.environ.get("FF_LEAGUE_CONFIG_KEY", "league_config.json")  # bucket root - same object the front-end fetches
+ESPN_SECRET_NAME = os.environ.get("FF_ESPN_SECRET_NAME")  # required when backend == "s3"
 
 
 def _get_s3_json(bucket, key):
@@ -130,19 +130,19 @@ def get_credentials_from_secrets_manager(secret_name=None):
 
 
 def load_all_config():
-    """Dispatch on WHO_DAT_CONFIG_BACKEND and return the four inputs every
+    """Dispatch on FF_CONFIG_BACKEND and return the four inputs every
     report needs: (league_config, owner_map, payouts_config, credentials).
 
     lambda_function.py calls this instead of the individual get_*()
     functions above, so it doesn't need to know which backend is active.
     Defaults to "local", so the same call also works from a local script or
-    `sam local invoke` run without WHO_DAT_CONFIG_BACKEND set.
+    `sam local invoke` run without FF_CONFIG_BACKEND set.
     """
     if CONFIG_BACKEND == "s3":
         if not CONFIG_BUCKET:
-            raise RuntimeError("WHO_DAT_SITE_BUCKET must be set when WHO_DAT_CONFIG_BACKEND=s3")
+            raise RuntimeError("FF_SITE_BUCKET must be set when FF_CONFIG_BACKEND=s3")
         if not ESPN_SECRET_NAME:
-            raise RuntimeError("WHO_DAT_ESPN_SECRET_NAME must be set when WHO_DAT_CONFIG_BACKEND=s3")
+            raise RuntimeError("FF_ESPN_SECRET_NAME must be set when FF_CONFIG_BACKEND=s3")
         return (
             get_league_config_from_s3(),
             get_owner_map_from_s3(),

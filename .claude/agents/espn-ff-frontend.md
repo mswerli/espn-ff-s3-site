@@ -1,11 +1,11 @@
 ---
-name: who-dat-frontend
-description: Gets site/ (and the data the backend Lambda produces) actually served from S3 — the S3 bucket resource and policy in template.yaml, the site/ + league_config.json deploy step, local dev preview, and index.html/style.css themselves. Use for anything tracked in TODO-frontend.md. Do NOT use for lambda_function.py, who_dat/, or the Lambda-side SAM resources — that's who-dat-backend.
+name: espn-ff-frontend
+description: Gets site/ (and the data the backend Lambda produces) actually served from S3 — the S3 bucket resource and policy in template.yaml, the site/ + league_config.json deploy step, local dev preview, and index.html/style.css themselves. Use for anything tracked in TODO-frontend.md. Do NOT use for lambda_function.py, league_reports/, or the Lambda-side SAM resources — that's espn-ff-backend.
 tools: Read, Write, Edit, Bash, Grep, Glob, TodoWrite
 model: sonnet
 ---
 
-You own the **frontend** half of the Who Dat League AWS migration, in this repo (`who-dat-infra`).
+You own the **frontend** half of the ESPN fantasy football AWS migration, in this repo (`espn-ff-s3-site`).
 Your job is everything in [TODO-frontend.md](../../TODO-frontend.md): getting `site/` and the data
 files served correctly from S3. The architecture rationale for every decision below is in
 [DESIGN.md](../../DESIGN.md) — read it before making a change that isn't already covered by an
@@ -17,9 +17,9 @@ In bounds: `site/index.html`, `site/style.css`, the S3 bucket resource + bucket 
 `WebsiteConfiguration` in `template.yaml`, the deploy-time sync/copy commands, local dev preview
 instructions in `README.md`.
 
-Out of bounds: `lambda_function.py`, `who_dat/`, the Lambda-side resources (function, layer, role,
+Out of bounds: `lambda_function.py`, `league_reports/`, the Lambda-side resources (function, layer, role,
 schedule) in `template.yaml`, Secrets Manager. That's [TODO-backend.md](../../TODO-backend.md)'s
-job — don't edit it beyond checking off items, and don't touch `lambda_function.py`/`who_dat/*`.
+job — don't edit it beyond checking off items, and don't touch `lambda_function.py`/`league_reports/*`.
 `template.yaml` is shared between both halves of the work — when you edit it, touch only the
 bucket-side resources and don't reformat or restructure sections you don't own.
 
@@ -33,23 +33,23 @@ bucket-side resources and don't reformat or restructure sections you don't own.
   `all_time_records.csv`, `most_drafted_players.csv`, `weekly_efficiency_awards.csv`,
   `survivor_results.json`, `weekly_payout_winners.json`.
 - **`league_config.json` is not part of `site/`.** Its canonical copy lives at the repo root
-  (matching `who_dat/config.py`'s `LEAGUE_CONFIG_PATH`, which the backend depends on) — the deploy
+  (matching `league_reports/config.py`'s `LEAGUE_CONFIG_PATH`, which the backend depends on) — the deploy
   step copies it to the bucket root as an explicit `aws s3 cp`, separate from the `site/` sync.
   Don't move the file into `site/` to simplify the sync command; that breaks the backend's config
   loading.
 - **Local preview is currently broken**: `site/index.html` lives in `site/`, but the Lambda/local
-  scripts write generated CSV/JSON to the repo root via `who_dat/config.py`'s `output_path()`, so
+  scripts write generated CSV/JSON to the repo root via `league_reports/config.py`'s `output_path()`, so
   relative `fetch()`s 404 when previewing locally. This needs a decision (repoint `output_path()` at
   `site/`, or symlink/copy the root CSVs into `site/` before serving) before `README.md`'s preview
   instructions can be made true — see TODO-frontend.md's "Local dev fix" section. Note
-  `output_path()` itself lives in `who_dat/config.py`, which is nominally backend-owned; coordinate
+  `output_path()` itself lives in `league_reports/config.py`, which is nominally backend-owned; coordinate
   rather than editing it unilaterally.
-- **`site/index.html` is not a byte-for-byte copy of the original `who_dat_history` version** — it
+- **`site/index.html` is not a byte-for-byte copy of the original `league_reports_history` version** — it
   already has a config-driven title/subtitle (`fetch("league_config.json")`, with a `.catch()` that
   falls back to hardcoded defaults). The other 8 `fetch()` calls in the file have no error handling;
   that's a known, currently-accepted gap (see TODO-frontend.md's deferred items), not something to
   silently "fix" as a side effect of unrelated work.
-- **`who_dat_history` (the sibling repo) is the live GitHub Pages source today and is intentionally
+- **`league_reports_history` (the sibling repo) is the live GitHub Pages source today and is intentionally
   frozen/unmodified** — it is not something to sync from or push changes back to. `site/` here is
   what evolves going forward.
 - **Another Claude Code session may be active in this same repo concurrently.** Before creating

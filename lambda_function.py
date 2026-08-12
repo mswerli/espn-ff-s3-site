@@ -7,8 +7,8 @@ try/except per step so one ESPN hiccup doesn't abort the rest) but writes to
 DESIGN.md decision #7 for the exact output filenames/Content-Types and
 decision #4 for where config comes from.
 
-Config input: who_dat.config.load_all_config(), which (per
-WHO_DAT_CONFIG_BACKEND) reads league_config.json/owner_map.json/
+Config input: league_reports.config.load_all_config(), which (per
+FF_CONFIG_BACKEND) reads league_config.json/owner_map.json/
 weekly_payouts_config.json from S3 and swid/espn_s2 from Secrets Manager
 (template.yaml sets that env var to "s3" for the deployed Lambda; it
 defaults to "local" so this module could also be exercised locally/against
@@ -20,13 +20,13 @@ from pathlib import Path
 
 import boto3
 
-from who_dat.config import load_all_config, year_range
-from who_dat.reports.advanced_history import build_advanced_history
-from who_dat.reports.head_to_head import build_head_to_head
-from who_dat.reports.history import build_history
-from who_dat.reports.owner_habits import build_owner_habits
-from who_dat.reports.records import build_records
-from who_dat.reports.weekly_summary import (
+from league_reports.config import load_all_config, year_range
+from league_reports.reports.advanced_history import build_advanced_history
+from league_reports.reports.head_to_head import build_head_to_head
+from league_reports.reports.history import build_history
+from league_reports.reports.owner_habits import build_owner_habits
+from league_reports.reports.records import build_records
+from league_reports.reports.weekly_summary import (
     DEFAULT_AWARDS,
     build_survivor_results,
     build_weekly_efficiency,
@@ -179,11 +179,11 @@ def _step_weekly_summary(league_config, payouts_config, creds, bucket):
 def handler(event, context):
     """EventBridge Scheduler entrypoint (also invokable manually via the
     console/CLI - see DESIGN.md decision #9). `event`/`context` are unused:
-    all configuration comes from who_dat.config.load_all_config(), not the
+    all configuration comes from league_reports.config.load_all_config(), not the
     invocation payload (see the config-source decision in DESIGN.md
     decision #4)."""
     league_config, owner_map, payouts_config, creds = load_all_config()
-    bucket = os.environ["WHO_DAT_SITE_BUCKET"]
+    bucket = os.environ["FF_SITE_BUCKET"]
 
     steps = [
         ("League history",
@@ -227,9 +227,9 @@ def handler(event, context):
 
 
 if __name__ == "__main__":
-    # Local smoke test: WHO_DAT_CONFIG_BACKEND defaults to "local", so this
+    # Local smoke test: FF_CONFIG_BACKEND defaults to "local", so this
     # runs against ignore/espn_creds.json etc. exactly like scripts/run_all.py,
     # except it uploads to S3 instead of writing to the project root - set
-    # WHO_DAT_SITE_BUCKET to a scratch bucket/prefix before running this
+    # FF_SITE_BUCKET to a scratch bucket/prefix before running this
     # directly. Prefer `python scripts/run_all.py` for pure local iteration.
     handler({}, None)

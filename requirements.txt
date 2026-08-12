@@ -5,7 +5,7 @@
 # shaped, not "everything local dev needs" - see requirements-dev.txt for
 # that.
 #
-# pandas/numpy are intentionally NOT here even though who_dat/reports/*.py
+# pandas/numpy are intentionally NOT here even though league_reports/reports/*.py
 # import pandas: the AWSSDKPandas-Python311 layer (template.yaml,
 # DESIGN.md decision #3) already provides pandas+numpy at /opt/python for
 # the deployed Lambda. Bundling pandas here too would (a) make `sam build`
@@ -20,6 +20,6 @@
 espn-api==0.45.1
 
 # boto3 is deliberately not pinned/listed here either: the Lambda execution
-# environment provides it (and botocore) preinstalled, and who_dat/config.py
+# environment provides it (and botocore) preinstalled, and league_reports/config.py
 # / lambda_function.py only import it lazily/at Lambda-entrypoint scope, so
 # this file never needs it for the Lambda package to work.

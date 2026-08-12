@@ -1,16 +1,16 @@
-# Who Dat League — AWS Hosting Design
+# espn-ff-s3-site — AWS Hosting Design
 
-Status: Phase 1 (Prep, `who_dat/`) and Phase 2 (static hosting) are done — the S3 site bucket
-(`who-dat-league-217412666418`, us-west-2, stack `who-dat-infra`) is live and seeded, see
-TODO-frontend.md. Phases 3+ (Lambda automation, season-cache, multi-league) status lives in
-TODO-backend.md.
+Status: Phase 1 (Prep, `league_reports/`) and Phase 2 (static hosting) are done, see TODO-frontend.md.
+Phases 3+ (Lambda automation, season-cache, multi-league) status lives in TODO-backend.md. What's
+actually live in AWS right now: [[espn-ff-live-infra]] memory.
 
-Sibling repo: `who_dat_history` — the original front-end (`index.html`/`style.css`) and local
-ESPN-fetch scripts (`scripts/*.py`, `helpers/utilities.py`) this design replaces the data-generation
-half of. It remains the **live GitHub Pages source today** and is intentionally unmodified. The copy
-of the front-end under this repo's `site/` (see decision #7) has already diverged from it — it picked
-up a config-driven title/subtitle read from `league_config.json` — and going forward `site/` here is
-the one that evolves; `who_dat_history` isn't a live upstream to sync from anymore.
+Sibling repo: a separate, older repo holds the original front-end (`index.html`/`style.css`) and
+local ESPN-fetch scripts (`scripts/*.py`, `helpers/utilities.py`) this design replaces the
+data-generation half of. It remains the **live GitHub Pages source today** and is intentionally
+unmodified. The copy of the front-end under this repo's `site/` (see decision #7) has already
+diverged from it — it picked up a config-driven title/subtitle read from `league_config.json` — and
+going forward `site/` here is the one that evolves; that original repo isn't a live upstream to sync
+from anymore.
 
 ## Goal
 
@@ -22,7 +22,7 @@ Move the site from "run scripts locally, copy CSVs next to `index.html`" to:
   league configuration as input instead of hardcoded local paths
 - AWS SAM as the one deployment tool for all of the infrastructure (bucket, Lambda, schedule, role)
 
-## Current state (who_dat_history repo, as of this design)
+## Current state (original repo, as of this design)
 
 **Front-end**: `index.html` + `style.css`, vanilla JS, no build step. Does relative `fetch()` calls
 against CSV/JSON files sitting next to it — e.g. `fetch("league_history.csv")`. This works unchanged
@@ -137,12 +137,12 @@ don't assume it works without testing against the actual `sam build` output agai
 
 The fix that actually works: `template.yaml`'s `DataGeneratorFunction` sets
 `Metadata: BuildMethod: makefile`, and the repo-root `Makefile` has a `build-DataGeneratorFunction`
-target that copies `lambda_function.py` + `who_dat/` and `pip install`s `requirements.txt` into
+target that copies `lambda_function.py` + `league_reports/` and `pip install`s `requirements.txt` into
 `$ARTIFACTS_DIR` explicitly — an **allow-list**, not a deny-list. Nothing else in the repo (`ignore/`,
 `site/`, `scripts/`, `config/`, `league_config.json`, docs, `.git/`, `.venv/`, ...) is ever a build
 input candidate, regardless of what gets added to the repo later — the opposite failure mode of a
 deny-list, which only protects against files someone remembered to add to it. Verified: `sam build`
-with this in place produces an artifact directory containing only `lambda_function.py`, `who_dat/`,
+with this in place produces an artifact directory containing only `lambda_function.py`, `league_reports/`,
 and `requirements.txt`'s installed dependencies — confirmed by grepping the entire build output for
 fragments of the real ESPN cookies and finding none, and by `find`ing for `ignore/`, `site/`,
 `scripts/`, `.git`, `.venv`, `.claude` anywhere under `.aws-sam/build/` and finding nothing.
@@ -153,8 +153,8 @@ fragments of the real ESPN cookies and finding none, and by `find`ing for `ignor
   (`fetch("league_config.json")`, with a `.catch()` that falls back to hardcoded defaults) to render
   the site title/subtitle, so the page itself is config-driven rather than hardcoded per league. That
   means `league_config.json` must be publicly readable at the site bucket root, same as the CSVs.
-  Its canonical location stays where `who_dat/config.py`'s `LEAGUE_CONFIG_PATH` already puts it — the
-  **project root**, alongside `who_dat/`, not inside `site/` — since that's already built, tested, and
+  Its canonical location stays where `league_reports/config.py`'s `LEAGUE_CONFIG_PATH` already puts it — the
+  **project root**, alongside `league_reports/`, not inside `site/` — since that's already built, tested, and
   committed, and both the Lambda and the local scripts read it from there. Rather than moving it (and
   touching tested code) or duplicating it into `site/`, the deploy step copies that one file to the
   bucket root as an explicit step alongside the `site/` sync (see decision #7). Same Lambda config
@@ -183,9 +183,9 @@ fragments of the real ESPN cookies and finding none, and by `find`ing for `ignor
   The frontend bucket policy makes the whole bucket public-read anyway (see TODO-frontend.md), so
   "private prefix" here is organizational, not an actual access boundary — consistent with these two
   files already being "not sensitive" above.
-- `who_dat/config.py` implements this as an S3+Secrets-Manager backend selected by one env var
-  (`WHO_DAT_CONFIG_BACKEND=s3`, set on the Lambda in `template.yaml`), alongside — not replacing — the
-  local-file backend local scripts already use (`WHO_DAT_CONFIG_BACKEND` defaults to `"local"`).
+- `league_reports/config.py` implements this as an S3+Secrets-Manager backend selected by one env var
+  (`FF_CONFIG_BACKEND=s3`, set on the Lambda in `template.yaml`), alongside — not replacing — the
+  local-file backend local scripts already use (`FF_CONFIG_BACKEND` defaults to `"local"`).
 
 **Extended by decision #12 below** for multi-league support: the single fixed keys here
 (`league_config.json`, `config/owner_map.json`, `config/weekly_payouts_config.json`) become per-league
@@ -215,7 +215,7 @@ Split each script's "fetch from ESPN → compute → write CSV to a hardcoded lo
 importable compute functions, so both the Lambda handler and a local CLI call the same logic:
 
 ```
-who_dat/
+league_reports/
   espn_client.py        # League() construction, retry/backoff
   config.py              # local file, OR S3, OR Secrets Manager, based on env
   reports/
@@ -242,7 +242,7 @@ corrected here: the Lambda writes flat to the bucket root, matching exactly what
 scripts already do via `output_path()`. This also means the local CSV output path and the S3 upload
 path are identical, so there's one thing less to keep in sync.
 
-(`site/index.html` isn't a byte-for-byte copy of the original `who_dat_history/index.html` — it also
+(`site/index.html` isn't a byte-for-byte copy of the original repo's `index.html` — it also
 picked up a config-driven title/subtitle: `id="site-title"`/`id="site-subtitle"` header elements plus
 a `fetch("league_config.json")` block, with a `.catch()` that falls back to the hardcoded defaults if
 the file is missing. See decision #4.)
@@ -329,7 +329,7 @@ decision introduces under `leagues/<league_id>/`. Written this way from the star
 
 #### 10a. Per-year season cache (closes the re-fetch waste)
 
-- New `who_dat/cache.py`, S3-only (boto3 imported lazily, like `config.py`'s S3 backend — local
+- New `league_reports/cache.py`, S3-only (boto3 imported lazily, like `config.py`'s S3 backend — local
   scripts never touch this). Two functions: `get_cached_year(league_id, report, year)` /
   `put_cached_year(league_id, report, year, data)`, storing/reading JSON at
   `s3://<bucket>/leagues/<league_id>/cache/<report>/<year>.json` (a new prefix, not the public bucket
@@ -362,7 +362,7 @@ decision introduces under `leagues/<league_id>/`. Written this way from the star
   the re-fetch-avoidance sense, it's supposed to hit ESPN fresh every time it runs. But "only ever
   touches the current year" turns out to have a retention gap of its own once you also want past
   seasons' weekly data around after rollover — see decision #11 below, which reuses this same
-  `who_dat/cache.py` module for archival, not re-fetch avoidance.
+  `league_reports/cache.py` module for archival, not re-fetch avoidance.
 - Cache staleness is accepted as permanent once written for a closed year — there's no automatic
   invalidation. If `owner_map.json` or league config ever changes something that affects historical
   rows retroactively (e.g. renaming an owner), the fix is deleting the affected
@@ -457,7 +457,7 @@ Two gaps, one fix each, both building on decision #10's machinery instead of int
   data be (re)built on demand, e.g. `aws lambda invoke --payload '{"league_ids":["885349"],
   "steps":["weekly_summary"],"year":2024}' ...` — the same manual-invoke pattern decision #10b already
   establishes for `owner_habits`.
-- **Go-forward retention.** Reuse `who_dat/cache.py` from 10a, but for archival rather than re-fetch
+- **Go-forward retention.** Reuse `league_reports/cache.py` from 10a, but for archival rather than re-fetch
   avoidance: every time `_step_weekly_summary` computes a year's efficiency/survivor/payouts data
   (current or backfilled), it also writes that year's result to
   `leagues/<league_id>/cache/weekly_efficiency/<year>.json`,
@@ -550,7 +550,7 @@ event names, with outputs kept fully separate per league.
   bucket root can't tell files apart" problem, solved by construction instead of by an explicit key
   list this time, since an explicit list isn't possible without a template change per league (defeats
   12a's goal).
-- `who_dat/config.py`'s S3 backend functions all gain a `league_id` parameter and build their key off
+- `league_reports/config.py`'s S3 backend functions all gain a `league_id` parameter and build their key off
   it: `LEAGUE_CONFIG_KEY` becomes `f"leagues/{league_id}/league_config.json"`, `CONFIG_PREFIX` becomes
   `f"leagues/{league_id}/config/"`. `load_all_config()` takes `league_id` and returns that league's
   four inputs, same shape as today.
@@ -604,10 +604,10 @@ their own; only `site/index.html`'s fetch paths need to catch up separately.
 
 #### Rollout order
 
-1. `who_dat/config.py`: add `league_id` to every S3-backend function and `load_all_config()`.
+1. `league_reports/config.py`: add `league_id` to every S3-backend function and `load_all_config()`.
 2. `lambda_function.py`: `league_ids` in the event, the nested league × step loop, per-league upload
    paths, per-league keyed `succeeded`/`failed` reporting.
-3. Land alongside (not after) decision #10/#11's work, since `who_dat/cache.py` and the archive-write
+3. Land alongside (not after) decision #10/#11's work, since `league_reports/cache.py` and the archive-write
    paths should be built with `league_id` in their signature from the start rather than retrofitted —
    see the note at the top of decision #10.
 4. `template.yaml`: collapse the decision #4/#7 IAM statements into the single `leagues/*` grant;
@@ -624,11 +624,11 @@ their own; only `site/index.html`'s fetch paths need to catch up separately.
 ## Repo layout (this repo)
 
 ```
-who-dat-infra/
+espn-ff-s3-site/
   DESIGN.md              # this file
   template.yaml           # SAM template: bucket, Lambda, layer, role, schedule(s)
   site/                   # index.html, style.css — synced to the bucket root; Lambda output (*.csv/*.json) is not part of this folder
-  who_dat/                # shared report-building code (see above)
+  league_reports/                # shared report-building code (see above)
     cache.py              # per-league, per-year S3 cache: re-fetch avoidance (#10a) + weekly-summary archival (#11) — Lambda-only, like config.py's S3 backend
   lambda_function.py      # Lambda entrypoint; nested league_ids x steps loop, event["year"] override (decisions #10b/#11/#12)
   scripts/                # local CLI wrappers
@@ -641,7 +641,7 @@ who-dat-infra/
 ## Rollout phases
 
 1. **Prep**: pin `requirements.txt` (`espn_api`, `pandas`); port each script's compute logic into
-   `who_dat/reports/*` as importable functions (behavior-preserving — verify local CSV output is
+   `league_reports/reports/*` as importable functions (behavior-preserving — verify local CSV output is
    byte-identical to today's).
 2. **Static hosting only**: SAM-deploy just the S3 bucket, manually `aws s3 sync` today's
    `index.html`/`style.css`/CSVs, confirm the site renders identically to local. Validates hosting
