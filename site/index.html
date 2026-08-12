@@ -173,8 +173,19 @@
 </main>
 
 <script>
+/* ================= DATA SOURCE =================
+   Same-origin relative fetches (DESIGN.md decision #7) - the site bucket
+   root is a flat namespace holding index.html/style.css alongside the
+   Lambda-written CSV/JSON outputs, so a bare filename resolves correctly
+   once this page is served from that bucket. dataUrl() is kept as a
+   pass-through (rather than inlining bare fetch() calls everywhere) so a
+   future need to point at a different origin - e.g. local preview against
+   a bucket, or a CDN in front of it - is a one-line change here again. */
+const DATA_BASE_URL = "";
+const dataUrl = (filename) => DATA_BASE_URL + filename;
+
 /* ================= SITE CONFIG (per-league title/subtitle) ================= */
-fetch("league_config.json")
+fetch(dataUrl("league_config.json"))
   .then(res => res.json())
   .then(config => {
     const site = config.site || {};
@@ -262,7 +273,7 @@ function sortTable(table, colIndex) {
 /* ============================================================
    LEAGUE HISTORY — ONE TABLE, DROPDOWN CONTROLS IT
 ============================================================ */
-fetch("league_history.csv")
+fetch(dataUrl("league_history.csv"))
   .then(res => res.text())
   .then(csv => {
     const { headers, rows } = parseCSV(csv);
@@ -463,7 +474,7 @@ fetch("league_history.csv")
    HEAD TO HEAD (All-Time Only, Single Table)
 ============================================================ */
 let h2hData = {};
-fetch("head_to_head_lifetime.csv")
+fetch(dataUrl("head_to_head_lifetime.csv"))
   .then(r => r.text())
   .then(t => {
     const [h, ...lines] = t.trim().split("\n");
@@ -509,7 +520,7 @@ function filterH2H() {
 /* ============================================================
    ADVANCED METRICS (All-Time + Season Dropdown, ONE TABLE)
 ============================================================ */
-fetch("advanced_team_metrics.csv")
+fetch(dataUrl("advanced_team_metrics.csv"))
   .then(r => r.text())
   .then(t => {
     const { headers, rows } = parseCSV(t);
@@ -627,7 +638,7 @@ fetch("advanced_team_metrics.csv")
 ============================================================ */
 let allRecords = [];
 
-fetch("all_time_records.csv")
+fetch(dataUrl("all_time_records.csv"))
   .then(res => res.text())
   .then(csv => {
     const { headers, rows } = parseCSV(csv);
@@ -684,7 +695,7 @@ document.getElementById("category-filter").addEventListener("change", e => {
 /* ============================================================
    HABITS
 ============================================================ */
-fetch("most_drafted_players.csv")
+fetch(dataUrl("most_drafted_players.csv"))
   .then(response => response.text())
   .then(text => {
     const lines = text.trim().split("\n");
@@ -714,9 +725,9 @@ fetch("most_drafted_players.csv")
    - survivor eliminated
 ============================================================ */
 Promise.all([
-  fetch("weekly_efficiency_awards.csv").then(res => res.text()),
-  fetch("survivor_results.json").then(res => res.json()),
-  fetch("weekly_payout_winners.json").then(res => res.json())
+  fetch(dataUrl("weekly_efficiency_awards.csv")).then(res => res.text()),
+  fetch(dataUrl("survivor_results.json")).then(res => res.json()),
+  fetch(dataUrl("weekly_payout_winners.json")).then(res => res.json())
 ]).then(([awardsText, survivorData, payoutData]) => {
 
   // --- Survivor pills ---

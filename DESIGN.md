@@ -1,6 +1,9 @@
 # Who Dat League — AWS Hosting Design
 
-Status: draft, not yet built. Data-generation refactor (Phase 1) is done — see `who_dat/`.
+Status: Phase 1 (Prep, `who_dat/`) and Phase 2 (static hosting) are done — the S3 site bucket
+(`who-dat-league-217412666418`, us-west-2, stack `who-dat-infra`) is live and seeded, see
+TODO-frontend.md. Phases 3+ (Lambda automation, season-cache, multi-league) status lives in
+TODO-backend.md.
 
 Sibling repo: `who_dat_history` — the original front-end (`index.html`/`style.css`) and local
 ESPN-fetch scripts (`scripts/*.py`, `helpers/utilities.py`) this design replaces the data-generation

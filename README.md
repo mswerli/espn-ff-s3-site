@@ -4,12 +4,13 @@ Fantasy football league history site, mid-migration to AWS. See
 [DESIGN.md](DESIGN.md) for the target architecture (S3 static hosting + a
 scheduled Lambda that regenerates the data files) and the rollout plan.
 
-This repo is currently at **Phase 1 (Prep)**: the data-generation code has
-been ported from the original [who_dat_history](https://github.com/) repo
-into an importable `who_dat/` package, so the same report-building
-functions can run from a local script today and from a Lambda handler once
-that's built (Phase 3+ in DESIGN.md). Nothing is deployed to AWS yet -
-`template.yaml` and `lambda_function.py` don't exist.
+This repo has completed **Phase 1 (Prep)** and **Phase 2 (static hosting)**: the data-generation
+code has been ported into an importable `who_dat/` package, and the S3 site bucket is deployed and
+live at `http://who-dat-league-217412666418.s3-website-us-west-2.amazonaws.com` (stack
+`who-dat-infra`, region `us-west-2`), seeded with `site/` plus one-time manually-copied sample data
+(see TODO-frontend.md). `lambda_function.py` and its `template.yaml` resources are also built and
+deployed (Phase 3+, see TODO-backend.md for that work's status) - the weekly schedule exists, but
+its season-cache/multi-league refinements are still in progress there.
 
 ## Local development
 
@@ -90,7 +91,8 @@ site/                        # index.html / style.css - the site itself
 
 ## What's not here yet
 
-Per DESIGN.md's rollout phases, still to build: `template.yaml` (SAM:
-bucket, Lambda, layer, schedule, role), `lambda_function.py` (the handler
-that calls the same `who_dat/reports/*` functions and uploads to S3), the
-Secrets Manager/S3 config wiring, and the season-cache optimization.
+Per DESIGN.md's rollout phases, still open: the local-preview path is broken (see
+TODO-frontend.md's "Local dev fix" - step 5 above doesn't actually work as written yet, since
+`who_dat/config.py`'s `output_path()` writes to the repo root, not `site/`), a custom domain/HTTPS,
+CI to auto-sync `site/` on push, and (per TODO-backend.md) the season-cache optimization and
+multi-league partitioning.

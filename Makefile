@@ -40,3 +40,40 @@ build-DataGeneratorFunction:
 		--upgrade
 
 .PHONY: build-DataGeneratorFunction
+
+# --------------------------------------------------------------------------
+# Frontend deploy tooling (TODO-frontend.md "Deploy tooling") - these are
+# separate from `sam deploy` on purpose (DESIGN.md decision #2): SAM only
+# pushes infra + Lambda code, never arbitrary files like index.html/style.css
+# or league_config.json, so publishing those is its own explicit step.
+#
+# STACK_NAME/AWS_REGION default to this project's actual deployed stack -
+# override on the command line (e.g. `make sync-site STACK_NAME=other`) if
+# ever deploying a second stack (e.g. a scratch/staging one).
+STACK_NAME ?= who-dat-infra
+AWS_REGION ?= us-west-2
+
+# $BUCKET is looked up from the stack's Outputs (SiteBucketNameOutput)
+# rather than hardcoded here, so a bucket rename/redeploy doesn't require
+# editing this file - see TODO-frontend.md's "how does $BUCKET get sourced"
+# item.
+site-bucket:
+	@aws cloudformation describe-stacks \
+		--stack-name $(STACK_NAME) \
+		--region $(AWS_REGION) \
+		--query "Stacks[0].Outputs[?OutputKey=='SiteBucketNameOutput'].OutputValue" \
+		--output text
+
+sync-site:
+	aws s3 sync site/ "s3://$$($(MAKE) -s site-bucket)/" --region $(AWS_REGION)
+
+sync-config:
+	aws s3 cp league_config.json "s3://$$($(MAKE) -s site-bucket)/league_config.json" --region $(AWS_REGION)
+
+# Publishes everything the frontend deploy step owns (site/ + the one
+# repo-root config file) in one go. Does NOT run `sam build && sam deploy` -
+# that's infra/Lambda code, chain it yourself first if the stack itself also
+# changed: `sam build && sam deploy && make publish-site`.
+publish-site: sync-site sync-config
+
+.PHONY: site-bucket sync-site sync-config publish-site
