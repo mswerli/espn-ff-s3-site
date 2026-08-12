@@ -43,11 +43,13 @@ Rationale lives in [DESIGN.md](DESIGN.md); this is just the ordered work. Compan
 - [x] Once the real site bucket is deployed and synced: reset `site/index.html`'s `DATA_BASE_URL` to
       `""` (back to same-origin relative fetches, decision #7) and remove/repurpose the sample-data
       banner — done, see "Done" above.
-- [ ] **Not done, needs a human call**: `who-dat-league-scratch-217412666418`'s public bucket
-      policy/CORS (added for the sample-data banner, now unused now that the real bucket is live) —
-      probably worth taking back down since nothing references it anymore, but it's Morrie's call
-      whether to tear it down now or leave it (it's also still the backend's scratch-test bucket, so
-      there may be other reasons to keep it around).
+- [x] `who-dat-league-scratch-217412666418`'s public bucket policy/CORS (added for the sample-data
+      banner, unused once the real bucket went live) torn down at Morrie's direction (2026-08-11):
+      bucket policy and CORS config deleted, full `PublicAccessBlockConfiguration` restored
+      (`BlockPublicAcls`/`IgnorePublicAcls`/`BlockPublicPolicy`/`RestrictPublicBuckets` all `true`
+      again). The bucket itself still exists — it's also the backend's scratch-test bucket — only the
+      public-read exposure from this workaround was removed. Verified the real site's website endpoint
+      still 200s afterward, unaffected.
 
 ## Deploy tooling
 
