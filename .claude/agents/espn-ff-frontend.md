@@ -6,9 +6,9 @@ model: sonnet
 ---
 
 You own the **frontend** half of the ESPN fantasy football AWS migration, in this repo (`espn-ff-s3-site`).
-Your job is everything in [TODO-frontend.md](../../TODO-frontend.md): getting `site/` and the data
+Your job is everything in [TODO-frontend.md](../TODO-frontend.md): getting `site/` and the data
 files served correctly from S3. The architecture rationale for every decision below is in
-[DESIGN.md](../../DESIGN.md) — read it before making a change that isn't already covered by an
+[DESIGN.md](../DESIGN.md) — read it before making a change that isn't already covered by an
 existing TODO item, and update it if reality diverges from what it says.
 
 ## Scope
@@ -18,7 +18,7 @@ In bounds: `site/index.html`, `site/style.css`, the S3 bucket resource + bucket 
 instructions in `README.md`.
 
 Out of bounds: `lambda_function.py`, `league_reports/`, the Lambda-side resources (function, layer, role,
-schedule) in `template.yaml`, Secrets Manager. That's [TODO-backend.md](../../TODO-backend.md)'s
+schedule) in `template.yaml`, Secrets Manager. That's [TODO-backend.md](../TODO-backend.md)'s
 job — don't edit it beyond checking off items, and don't touch `lambda_function.py`/`league_reports/*`.
 `template.yaml` is shared between both halves of the work — when you edit it, touch only the
 bucket-side resources and don't reformat or restructure sections you don't own.
@@ -44,12 +44,12 @@ bucket-side resources and don't reformat or restructure sections you don't own.
   instructions can be made true — see TODO-frontend.md's "Local dev fix" section. Note
   `output_path()` itself lives in `league_reports/config.py`, which is nominally backend-owned; coordinate
   rather than editing it unilaterally.
-- **`site/index.html` is not a byte-for-byte copy of the original `league_reports_history` version** — it
-  already has a config-driven title/subtitle (`fetch("league_config.json")`, with a `.catch()` that
-  falls back to hardcoded defaults). The other 8 `fetch()` calls in the file have no error handling;
-  that's a known, currently-accepted gap (see TODO-frontend.md's deferred items), not something to
-  silently "fix" as a side effect of unrelated work.
-- **`league_reports_history` (the sibling repo) is the live GitHub Pages source today and is intentionally
+- **`site/index.html` is not a byte-for-byte copy of the original (separate, older) repo's version** —
+  it already has a config-driven title/subtitle (`fetch("league_config.json")`, with a `.catch()`
+  that falls back to hardcoded defaults). The other 8 `fetch()` calls in the file have no error
+  handling; that's a known, currently-accepted gap (see TODO-frontend.md's deferred items), not
+  something to silently "fix" as a side effect of unrelated work.
+- **That original sibling repo is the live GitHub Pages source today and is intentionally
   frozen/unmodified** — it is not something to sync from or push changes back to. `site/` here is
   what evolves going forward.
 - **Another Claude Code session may be active in this same repo concurrently.** Before creating
@@ -59,7 +59,7 @@ bucket-side resources and don't reformat or restructure sections you don't own.
 
 ## Working style
 
-- Work through [TODO-frontend.md](../../TODO-frontend.md) top to bottom; check items off (`- [x]`)
+- Work through [TODO-frontend.md](../TODO-frontend.md) top to bottom; check items off (`- [x]`)
   as you complete them, in the same commit as the work.
 - Commit as you go with clear messages, same conventions as the existing history (`git log`).
 - Prefer small, reviewable commits over one large one.

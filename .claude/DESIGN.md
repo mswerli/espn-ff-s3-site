@@ -1,7 +1,7 @@
 # espn-ff-s3-site — AWS Hosting Design
 
-Status: Phase 1 (Prep, `league_reports/`) and Phase 2 (static hosting) are done, see TODO-frontend.md.
-Phases 3+ (Lambda automation, season-cache, multi-league) status lives in TODO-backend.md. What's
+Status: Phase 1 (Prep, `league_reports/`) and Phase 2 (static hosting) are done, see .claude/TODO-frontend.md.
+Phases 3+ (Lambda automation, season-cache, multi-league) status lives in .claude/TODO-backend.md. What's
 actually live in AWS right now: [[espn-ff-live-infra]] memory.
 
 Sibling repo: a separate, older repo holds the original front-end (`index.html`/`style.css`) and
@@ -180,7 +180,7 @@ fragments of the real ESPN cookies and finding none, and by `find`ing for `ignor
   granting `s3:GetObject` on two more keys in the same bucket is a marginal addition, not a new
   mechanism; (3) it keeps `lambda_function.py`'s `event`/`context` params unused, so the same handler
   can be invoked identically from the schedule, the console, or the CLI with no payload to remember.
-  The frontend bucket policy makes the whole bucket public-read anyway (see TODO-frontend.md), so
+  The frontend bucket policy makes the whole bucket public-read anyway (see .claude/TODO-frontend.md), so
   "private prefix" here is organizational, not an actual access boundary — consistent with these two
   files already being "not sensitive" above.
 - `league_reports/config.py` implements this as an S3+Secrets-Manager backend selected by one env var
@@ -278,7 +278,7 @@ because it lives outside `site/` and isn't something a `site/` sync would pick u
 below partitions the Lambda's outputs under `leagues/<league_id>/` once more than one league is
 configured, which means `site/index.html`'s bare-filename `fetch()` calls stop resolving as soon as a
 second league exists — a real front-end coupling, not just a backend implementation detail, called out
-explicitly in #12 and flagged for [TODO-frontend.md](TODO-frontend.md) rather than decided here.
+explicitly in #12 and flagged for [TODO-frontend.md](.claude/TODO-frontend.md) rather than decided here.
 
 ### 8. Front-end error handling is inconsistent, and that's a minor known gap
 
@@ -475,7 +475,7 @@ Two gaps, one fix each, both building on decision #10's machinery instead of int
   survives the 2026 rollover automatically instead of needing a manual "grab it before it's clobbered"
   step.
 - Whether/when the front end ever gets a "browse past seasons' weekly awards" view against those
-  `archive/` files is a `site/`/frontend decision, not made here — TODO-frontend.md's problem if wanted,
+  `archive/` files is a `site/`/frontend decision, not made here — .claude/TODO-frontend.md's problem if wanted,
   not required for this backend change to be complete.
 - New IAM: covered by decision #12's single `leagues/*` grant — no separate `archive/`-specific
   statement needed since it's nested under the same per-league prefix.
@@ -597,8 +597,8 @@ superseded by this single prefix grant, not kept alongside it.
 moment outputs move under `leagues/<league_id>/` — this is a real breaking change for the front end,
 not just an internal backend refactor, since the published key names change. What the front end should
 do about it (a league picker page, a build-time/query-string league selector, one `site/` deploy per
-league under a per-league prefix, etc.) is a `site/`/TODO-frontend.md decision, deliberately not made
-here. Flagged in TODO-frontend.md so it isn't lost, but this backend change should not be considered
+league under a per-league prefix, etc.) is a `site/`/.claude/TODO-frontend.md decision, deliberately not made
+here. Flagged in .claude/TODO-frontend.md so it isn't lost, but this backend change should not be considered
 blocked on a frontend answer — the S3 layout and Lambda behavior above are complete and correct on
 their own; only `site/index.html`'s fetch paths need to catch up separately.
 
@@ -625,7 +625,7 @@ their own; only `site/index.html`'s fetch paths need to catch up separately.
 
 ```
 espn-ff-s3-site/
-  DESIGN.md              # this file
+  .claude/DESIGN.md       # this file
   template.yaml           # SAM template: bucket, Lambda, layer, role, schedule(s)
   site/                   # index.html, style.css — synced to the bucket root; Lambda output (*.csv/*.json) is not part of this folder
   league_reports/                # shared report-building code (see above)
@@ -635,7 +635,7 @@ espn-ff-s3-site/
   requirements.txt         # what `sam build` packages into the Lambda — espn_api only, no pandas (decision #3)
   requirements-dev.txt     # local dev only — requirements.txt + pandas, not read by `sam build`
   Makefile                 # build-DataGeneratorFunction (SAM's custom build hook, decision #3) +
-                            # sam build/deploy + s3 sync convenience targets (TODO-frontend.md)
+                            # sam build/deploy + s3 sync convenience targets (.claude/TODO-frontend.md)
 ```
 
 ## Rollout phases

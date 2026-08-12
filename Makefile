@@ -4,7 +4,7 @@
 # itself, with $(ARTIFACTS_DIR) pointed at the Lambda build output dir. See
 # the Metadata comment in template.yaml for why this exists instead of the
 # default Python builder: CodeUri is the whole repo root (lambda_function.py
-# lives there per DESIGN.md), which also holds ignore/ - real ESPN
+# lives there per .claude/DESIGN.md), which also holds ignore/ - real ESPN
 # swid/espn_s2 session cookies - and the default builder's CopySource step
 # has no working user-configurable exclude (its .samignore support doesn't
 # actually exist in current aws-sam-cli/aws-lambda-builders, despite general
@@ -42,8 +42,8 @@ build-DataGeneratorFunction:
 .PHONY: build-DataGeneratorFunction
 
 # --------------------------------------------------------------------------
-# Frontend deploy tooling (TODO-frontend.md "Deploy tooling") - these are
-# separate from `sam deploy` on purpose (DESIGN.md decision #2): SAM only
+# Frontend deploy tooling (.claude/TODO-frontend.md "Deploy tooling") - these are
+# separate from `sam deploy` on purpose (.claude/DESIGN.md decision #2): SAM only
 # pushes infra + Lambda code, never arbitrary files like index.html/style.css
 # or league_config.json, so publishing those is its own explicit step.
 #
@@ -55,7 +55,7 @@ AWS_REGION ?= us-west-2
 
 # $BUCKET is looked up from the stack's Outputs (SiteBucketNameOutput)
 # rather than hardcoded here, so a bucket rename/redeploy doesn't require
-# editing this file - see TODO-frontend.md's "how does $BUCKET get sourced"
+# editing this file - see .claude/TODO-frontend.md's "how does $BUCKET get sourced"
 # item.
 site-bucket:
 	@aws cloudformation describe-stacks \

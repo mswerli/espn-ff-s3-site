@@ -2,15 +2,15 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
   ESPN fantasy football site - data-generation Lambda + schedule (backend
-  half of the espn-ff-s3-site stack). See DESIGN.md for the full
+  half of the espn-ff-s3-site stack). See .claude/DESIGN.md for the full
   architecture.
 
   NOTE - this file is shared between the backend and frontend halves of
-  the work (TODO-backend.md / TODO-frontend.md). The Lambda-side resources
+  the work (.claude/TODO-backend.md / .claude/TODO-frontend.md). The Lambda-side resources
   (function, layer, execution role, Secrets Manager secret, EventBridge
   Scheduler) are backend's; the S3 site bucket, its public-read bucket
   policy, WebsiteConfiguration, and Block Public Access settings (see the
-  "Static site bucket" section below) are frontend's, per TODO-frontend.md's
+  "Static site bucket" section below) are frontend's, per .claude/TODO-frontend.md's
   "Infrastructure" section. Collapsed into one stack: the bucket resource's
   BucketName is !Ref SiteBucketName, the same parameter the Lambda-side IAM
   policies already !Sub-reference, so both halves resolve to the same bucket
@@ -68,8 +68,8 @@ Parameters:
       don't change it as a side effect of a routine deploy.
 
 Resources:
-  # --- Static site bucket (frontend-owned; TODO-frontend.md "Infrastructure") ----
-  # Plain S3 static website hosting, no CloudFront/OAC (DESIGN.md decision #1) -
+  # --- Static site bucket (frontend-owned; .claude/TODO-frontend.md "Infrastructure") ----
+  # Plain S3 static website hosting, no CloudFront/OAC (.claude/DESIGN.md decision #1) -
   # public HTTP endpoint, public-read bucket policy below instead of signed
   # URLs/a CDN origin access control.
   SiteBucket:
@@ -80,7 +80,7 @@ Resources:
       # this pass) - reusing index.html means a missing/mistyped path still
       # renders the app shell (which then just shows empty tables) instead of
       # S3's raw XML error output. Worth revisiting if a real 404 page is
-      # ever wanted; noted in DESIGN.md.
+      # ever wanted; noted in .claude/DESIGN.md.
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: index.html
@@ -108,7 +108,7 @@ Resources:
             Resource: !Sub "arn:aws:s3:::${SiteBucket}/*"
 
   # --- Secrets Manager -----------------------------------------------
-  # ESPN credentials never go in S3 or git (see project memory / DESIGN.md
+  # ESPN credentials never go in S3 or git (see project memory / .claude/DESIGN.md
   # decision #4) - Secrets Manager only. Values come from NoEcho parameters
   # supplied at `sam deploy` time rather than a manual out-of-band
   # `aws secretsmanager create-secret` call, so the whole stack (secret
@@ -147,7 +147,7 @@ Resources:
             Version: "2012-10-17"
             Statement:
               # s3:PutObject scoped to exactly the 8 files the Lambda
-              # writes (DESIGN.md decision #7's table) - NOT a bucket-wide
+              # writes (.claude/DESIGN.md decision #7's table) - NOT a bucket-wide
               # or prefix wildcard. The bucket root is a flat namespace
               # shared with index.html/style.css/league_config.json (which
               # this Lambda never writes), so prefix scoping can't
@@ -167,7 +167,7 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              # Config-source decision (DESIGN.md decision #4 / TODO-backend.md):
+              # Config-source decision (.claude/DESIGN.md decision #4 / .claude/TODO-backend.md):
               # league_config.json is read from the bucket root - the same
               # public object the frontend deploy step publishes for the
               # browser to fetch, so there's one copy, not two. owner_map.json
@@ -200,16 +200,16 @@ Resources:
       FunctionName: !Ref FunctionName
       Description: >
         Weekly regeneration of the league site's CSV/JSON data files
-        from ESPN. See DESIGN.md and TODO-backend.md.
+        from ESPN. See .claude/DESIGN.md and .claude/TODO-backend.md.
       CodeUri: ./
       Handler: lambda_function.handler
       Runtime: python3.11
       Architectures:
         - x86_64
-      # Generous starting point per TODO-backend.md - tune down once real
-      # runtime is measured (see TODO-backend.md "Testing"); 900s is the
+      # Generous starting point per .claude/TODO-backend.md - tune down once real
+      # runtime is measured (see .claude/TODO-backend.md "Testing"); 900s is the
       # Lambda hard cap, so this leaves no further headroom to grow into
-      # without the season-cache optimization (DESIGN.md decision #5).
+      # without the season-cache optimization (.claude/DESIGN.md decision #5).
       Timeout: 900
       # pandas + a full multi-year ESPN history in memory at once needs
       # more than the 128-512MB default; 1024MB is a starting point, not a
@@ -228,7 +228,7 @@ Resources:
     DependsOn: DataGeneratorLogGroup
     Metadata:
       # CodeUri is the whole repo root (lambda_function.py lives there per
-      # DESIGN.md's target layout), and that root also holds ignore/ - real
+      # .claude/DESIGN.md's target layout), and that root also holds ignore/ - real
       # ESPN swid/espn_s2 session cookies. sam build's default Python
       # builder has no user-configurable exclude list (its CopySource step
       # only skips a small hardcoded set - .git, .venv, __pycache__, etc -
@@ -270,7 +270,7 @@ Resources:
       Description: >
         Weekly trigger, in-season. PLACEHOLDER: Tuesday 09:00 America/Chicago
         (after Monday Night Football) - confirm the exact day/time with
-        Morrie before relying on this in prod (TODO-backend.md).
+        Morrie before relying on this in prod (.claude/TODO-backend.md).
       ScheduleExpression: "cron(0 9 ? * TUE *)"
       ScheduleExpressionTimezone: America/Chicago
       FlexibleTimeWindow:
@@ -284,7 +284,7 @@ Outputs:
   SiteBucketWebsiteURL:
     Description: >
       Public HTTP endpoint for the static site (S3 website hosting, no
-      HTTPS - DESIGN.md decision #1). This is what a browser/curl hits, and
+      HTTPS - .claude/DESIGN.md decision #1). This is what a browser/curl hits, and
       what README.md should point at.
     Value: !GetAtt SiteBucket.WebsiteURL
 

@@ -69,7 +69,7 @@ def year_range(config, span="full"):
 
 # --- S3 + Secrets Manager backend (Lambda) ------------------------------
 #
-# DESIGN.md decision #4: league_config.json is public (the front-end fetches
+# .claude/DESIGN.md decision #4: league_config.json is public (the front-end fetches
 # it directly), so its canonical copy already lives at the site bucket root
 # (written by the frontend deploy step, s3://<bucket>/league_config.json).
 # Rather than duplicating that file into a second, Lambda-only location,

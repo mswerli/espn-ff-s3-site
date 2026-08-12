@@ -6,9 +6,9 @@ model: sonnet
 ---
 
 You own the **backend** half of the ESPN fantasy football AWS migration, in this repo (`espn-ff-s3-site`).
-Your job is everything in [TODO-backend.md](../../TODO-backend.md): the Lambda that regenerates the
+Your job is everything in [TODO-backend.md](../TODO-backend.md): the Lambda that regenerates the
 site's data files from ESPN. The architecture rationale for every decision below is in
-[DESIGN.md](../../DESIGN.md) — read it before making a change that isn't already covered by an
+[DESIGN.md](../DESIGN.md) — read it before making a change that isn't already covered by an
 existing TODO item, and update it if reality diverges from what it says.
 
 ## Scope
@@ -18,7 +18,7 @@ loading), Lambda-side resources in `template.yaml` (function, layer, execution r
 schedule), Secrets Manager wiring, `requirements.txt`.
 
 Out of bounds: `site/`, the S3 bucket resource and bucket policy in `template.yaml`, anything about
-how the front-end fetches or renders data. That's [TODO-frontend.md](../../TODO-frontend.md)'s job —
+how the front-end fetches or renders data. That's [TODO-frontend.md](../TODO-frontend.md)'s job —
 don't edit it beyond checking off items, and don't touch `site/*` files. `template.yaml` is shared
 between both halves of the work — when you edit it, touch only the Lambda-side resources and don't
 reformat or restructure sections you don't own.
@@ -51,7 +51,7 @@ reformat or restructure sections you don't own.
 
 ## Working style
 
-- Work through [TODO-backend.md](../../TODO-backend.md) top to bottom; check items off (`- [x]`) as
+- Work through [TODO-backend.md](../TODO-backend.md) top to bottom; check items off (`- [x]`) as
   you complete them, in the same commit as the work.
 - Commit as you go with clear messages, same conventions as the existing history (`git log`).
 - Prefer small, reviewable commits over one large one.

@@ -4,7 +4,7 @@ and upload it to the site bucket.
 Mirrors scripts/run_all.py's structure (six steps, same labels, one
 try/except per step so one ESPN hiccup doesn't abort the rest) but writes to
 /tmp and uploads to S3 instead of writing to the project root. See
-DESIGN.md decision #7 for the exact output filenames/Content-Types and
+.claude/DESIGN.md decision #7 for the exact output filenames/Content-Types and
 decision #4 for where config comes from.
 
 Config input: league_reports.config.load_all_config(), which (per
@@ -67,7 +67,7 @@ def _write_json(data, filename):
 
 def _upload(local_path, bucket):
     """Upload a /tmp file to s3://<bucket>/<same filename>, at the bucket
-    root (DESIGN.md decision #7 - the site has no data/ prefix), with an
+    root (.claude/DESIGN.md decision #7 - the site has no data/ prefix), with an
     explicit Content-Type (boto3 doesn't infer one from the extension)."""
     key = local_path.name
     content_type = CONTENT_TYPES.get(local_path.suffix, "application/octet-stream")
@@ -178,9 +178,9 @@ def _step_weekly_summary(league_config, payouts_config, creds, bucket):
 
 def handler(event, context):
     """EventBridge Scheduler entrypoint (also invokable manually via the
-    console/CLI - see DESIGN.md decision #9). `event`/`context` are unused:
+    console/CLI - see .claude/DESIGN.md decision #9). `event`/`context` are unused:
     all configuration comes from league_reports.config.load_all_config(), not the
-    invocation payload (see the config-source decision in DESIGN.md
+    invocation payload (see the config-source decision in .claude/DESIGN.md
     decision #4)."""
     league_config, owner_map, payouts_config, creds = load_all_config()
     bucket = os.environ["FF_SITE_BUCKET"]
@@ -221,7 +221,7 @@ def handler(event, context):
     if failed:
         # Surface as a Lambda error (non-2xx CloudWatch metric) so a fully
         # broken run is visible, without having stopped any step that could
-        # still complete. See TODO-backend.md "Deferred" for actual alerting.
+        # still complete. See .claude/TODO-backend.md "Deferred" for actual alerting.
         raise RuntimeError(f"{len(failed)} report(s) failed: {failed}; result={result}")
     return result
 
