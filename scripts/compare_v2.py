@@ -22,16 +22,24 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 
-from league_reports.config import get_credentials, get_league_config, year_range
+from league_reports.config import get_credentials, get_league_config, get_owner_map, year_range
+from league_reports.reports.advanced_history import build_advanced_history
+from league_reports.reports.advanced_history_v2 import build_advanced_history_v2
 from league_reports.reports.head_to_head import build_head_to_head
 from league_reports.reports.head_to_head_v2 import build_head_to_head_v2
 
 FLOAT_TOLERANCE = 0.01  # both reports round to 2 decimals; this just absorbs summation-order noise
 
 
-def _parse_years(spec, config):
+# box_scores() (and everything built on it, per DESIGN.md decision #3's
+# scripts/advanced_history.py note) isn't reliable before 2019 - matches
+# lambda_function.py's year_range(config, span="box_score") for this step.
+DEFAULT_SPAN = {"head_to_head": "full", "advanced_history": "box_score"}
+
+
+def _parse_years(spec, config, span="full"):
     if spec is None:
-        return year_range(config, span="full")
+        return year_range(config, span=span)
     if "-" in spec:
         start, end = spec.split("-", 1)
         return range(int(start), int(end) + 1)
@@ -88,7 +96,7 @@ def _diff_frames(key_cols, v1_df, v2_df):
     return clean
 
 
-def compare_head_to_head(config, creds, years):
+def compare_head_to_head(config, creds, owner_map, years):
     print(f"Building v1 (legacy) head_to_head for {list(years)}...")
     v1 = build_head_to_head(
         league_id=config["league_id"], years=years,
@@ -102,10 +110,25 @@ def compare_head_to_head(config, creds, years):
     return _diff_frames(["Owner ID", "Opponent ID"], v1, v2)
 
 
+def compare_advanced_history(config, creds, owner_map, years):
+    print(f"Building v1 (legacy) advanced_history for {list(years)}...")
+    v1 = build_advanced_history(
+        league_id=config["league_id"], years=years, owner_map=owner_map,
+        swid=creds["swid"], espn_s2=creds["espn_s2"],
+    )
+    print(f"Building v2 advanced_history for {list(years)}...")
+    v2 = build_advanced_history_v2(
+        league_id=config["league_id"], years=years, owner_map=owner_map,
+        swid=creds["swid"], espn_s2=creds["espn_s2"],
+    )
+    return _diff_frames(["Year", "Owner ID"], v1, v2)
+
+
 REPORTS = {
     "head_to_head": compare_head_to_head,
-    # advanced_history, weekly_summary added here once their _v2 modules exist
-    # (rollout order steps 3+ in DESIGN-incremental-espn-pipeline.md)
+    "advanced_history": compare_advanced_history,
+    # weekly_summary added here once its _v2 module exists
+    # (rollout order step 3 in DESIGN-incremental-espn-pipeline.md)
 }
 
 
@@ -117,9 +140,10 @@ def main():
 
     config = get_league_config()
     creds = get_credentials()
-    years = _parse_years(args.years, config)
+    owner_map = get_owner_map()
+    years = _parse_years(args.years, config, span=DEFAULT_SPAN.get(args.report, "full"))
 
-    clean = REPORTS[args.report](config, creds, years)
+    clean = REPORTS[args.report](config, creds, owner_map, years)
 
     if not clean:
         print(f"\n{args.report}: DIFFERENCES FOUND (see above) - expected for head_to_head's "
