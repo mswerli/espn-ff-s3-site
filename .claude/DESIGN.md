@@ -621,6 +621,17 @@ their own; only `site/index.html`'s fetch paths need to catch up separately.
    confirm the retired decision #4/#7 IAM statements are actually gone, not just unused, once the
    `leagues/*` grant is in place.
 
+### 13. Incremental current-year refresh: shared fetch + raw box-score cache, not per-report caches
+
+Refines decision #10's plan for the *current* year (closed-year per-year caching above is unchanged).
+Reading `espn_api`'s source turned up that most of the current year's redundant ESPN cost isn't a
+per-week re-walk needing a partial-plus-merge cache per report — it's the same already-fetched data
+being independently re-fetched by every report function, including data (`head_to_head`'s per-week
+results) that was never genuinely per-week server-side to begin with. Full design, S3 layout, and a
+shadow-mode rollout plan (new code runs alongside the production pipeline, publishing to a separate
+`shadow/` prefix, diffed against production before any cutover) live in their own document:
+[DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md).
+
 ## Repo layout (this repo)
 
 ```

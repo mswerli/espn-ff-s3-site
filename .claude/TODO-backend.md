@@ -118,6 +118,16 @@ rationale in DESIGN.md decision #12.
       break once outputs move under `leagues/<league_id>/` — flagged in
       [TODO-frontend.md](TODO-frontend.md), not required for this backend item to be done
 
+## Incremental current-year refresh (DESIGN.md decision #13)
+
+Refines the current-year half of the "Incremental data generation" section above — closed-year caching
+there is unchanged. Full design, S3 layout, and the shadow-mode rollout mechanism (new `_v2` steps run
+alongside the production pipeline, publish to a `shadow/` prefix, get diffed against production before
+any cutover — nothing existing is touched until validated) live in
+[DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md); this is just the pointer.
+Not started — do this after the "Incremental data generation" and "Multi-league support" sections
+above land, since it builds on both (the `leagues/<league_id>/` prefix and the `STEPS` registry).
+
 ## Deferred / later
 
 - [ ] Failure alerting (e.g. a CloudWatch alarm on Lambda errors) — right now there's no plan to
