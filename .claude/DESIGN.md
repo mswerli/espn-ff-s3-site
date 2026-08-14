@@ -953,48 +953,84 @@ an empty list — already exactly what the front end expects when nothing qualif
 (no template/rendering change needed, per 15d's "already templated" finding). `weekly_efficiency_awards`
 and `survivor_results` are untouched by this — those aren't "payouts" and every league gets them.
 
-#### 15h. Manually-seeded history cache for seasons ESPN's API can never serve
+#### 15h. `history.py` falls back to ESPN's legacy standings endpoint for seasons the modern API 404s on
 
-Decision #15f's `years: 2026`-only config for all-for-the-shiva was correct for every *live-fetched*
-report, but the user separately had (and provided) ESPN's own **league-history page**
-(`fantasy.espn.com/football/league/history?leagueId=854288221`) — which, unlike the API, *does* still
-show final standings/win-loss records for 2014–2025, ESPN's own UI apparently having access to data the
-public API endpoints this codebase calls don't expose (or don't expose in a shape `espn_api` can parse —
-see 15f). Real data, not fabricated, just sourced by a human reading ESPN's website instead of the API.
+**Superseded its own first version within the same day.** The first attempt at this (a
+`leagues/<slug>/history_seed.json` hand-transcribed from a screenshot of ESPN's league-history *page*,
+pushed into the S3 cache via a one-off script) worked, but was immediately obsoleted by a better
+discovery: ESPN's **legacy `/leagueHistory/<id>?seasonId=<year>` endpoint** — the one `espn_api`'s
+`League()` already uses for pre-2018 seasons, and the one whose response shape it can't parse (missing
+`schedule` key, decision #15f) — turns out to keep working for **every** season this league has, not just
+pre-2018 ones, because the whole league lived under this legacy/imported data path until 2026. Confirmed
+directly: the modern `/seasons/<year>/segments/0/leagues/<id>` endpoint 404s for 2018–2025 (as decision
+#15f found), but the legacy endpoint returns a real 200 with real team data for all of them. And that raw
+response has far more than standings: real `team.id` (ESPN's actual, stable team_id — not a name),
+`team.owners` (real ESPN owner GUIDs), and `team.record.overall` (real wins/losses/pointsFor/
+pointsAgainst) — everything decision #15f's screenshot transcription had approximated or zeroed, now
+available as real fetched data. Cross-checked the API's `rankCalculatedFinal` and `record.overall`
+against the hand-transcription for every 2014–2025 row: zero mismatches (two teams the transcription had
+simply missed — inactive/dropped mid-season teams excluded from ESPN's public standings *page* but still
+present in the raw team list with a real record — the API data is a superset, not just a cross-check).
 
-- **`leagues/<slug>/history_seed.json`**: committed, human-transcribed `{year: [row, ...]}`, one row per
-  team matching `build_history()`'s exact dict shape. Only `Year`, `Owner Name` (the *team* name — no
-  owner-per-team-per-year mapping exists for these seasons, so team name is the best available
-  identifier, not a real person), `Wins`, `Losses`, and `Final Standing` are derivable from the page;
-  `Owner ID`, `Points For`, `Points Against`, and `Sacko` are zeroed/`false` rather than guessed, per
-  explicit instruction. `Champion` is derived (`Final Standing == 1`) and cross-checked against the
-  page's own champion badge for every year — matched all 12.
-- **`scripts/seed_history_cache.py <slug>`**: pushes `history_seed.json` into
-  `s3://<bucket>/leagues/<league_id>/cache/history/<year>.json` via `cache.py`'s existing
-  `put_cached_year` — the same cache prefix decision #10a already established, just populated by a human
-  transcription instead of a live ESPN fetch. Idempotent, safe to re-run after editing the seed file.
-- **`lambda_function.py`'s `_step_history`** gained `_merge_cached_history_years()`: after
-  `build_history()`'s live fetch (which still runs every time, and still silently drops any year it
-  can't reach — unchanged), it merges in any cached year the live fetch didn't already cover. A no-op
-  for any league with nothing seeded, so it runs unconditionally, not gated per-league.
-- **`list_cached_years(bucket, league_id, report)`**, new in `cache.py`: the merge deliberately does
-  **not** loop over `year_range(league_config, span="full")` to decide which years to check — that range
-  is all-for-the-shiva's live-fetchable years only (`2026`, by 15f's design), and seeding a manually-
-  transcribed year is specifically for years *outside* that range. `list_cached_years` instead lists
-  whatever's actually under `leagues/<league_id>/cache/<report>/` in S3 (an `s3:ListBucket` call the
-  `ReadWriteLeaguesPrefix` IAM policy already covers — no new IAM surface). Caught by testing against the
-  real deployed stack: the first deploy of this feature silently produced zero merged rows because it
-  used `year_range()`, which for this league is narrowed to exactly the one year that needs no merging.
-- Applies to any report, not just `history` — `cache.py`'s prefix scheme was already per-report
-  (`leagues/<id>/cache/<report>/<year>.json`); only `history` has a merge step wired up so far because
-  it's the only report ESPN's own UI happens to expose a non-API path for. `advanced_history`/`records`/
-  `head_to_head`/`owner_habits` all need real box-score/roster/draft data no webpage transcription can
-  reconstruct, so they stay empty for these seasons (confirmed: that's genuinely fine, the front end
-  degrades to "nothing to show," not a crash — decision #15f's empty-DataFrame fixes cover exactly this).
-- Validated: `league_history.csv` now has 13 years (2014–2026) for all-for-the-shiva, exactly matching
-  the transcribed page (spot-checked 2025: 12 teams, correct records, correct champion); who-dat
-  redeployed with the same code and confirmed unchanged (13 years, 2013–2025 — `list_cached_years`
-  correctly returns nothing for a league with no seeded cache, so the merge is a true no-op there).
+**What's built instead of the seed file:**
+
+- **`history.py`'s `_fetch_legacy_standings()`**: when `build_history()`'s normal `get_league()` call
+  fails for a year, instead of just logging and skipping (the old behavior, still the fallback of last
+  resort), it now tries this legacy endpoint directly via `requests` (bypassing `espn_api`'s `League()`
+  parsing entirely, since that's exactly what crashes on this response shape) and, on success, builds
+  rows straight from `team["id"]`/`owner_map.get(str(team["id"]))`/`team["record"]["overall"]`/
+  `team["rankCalculatedFinal"]` — the **same** `Owner ID`/`Owner Name` resolution path a normal
+  live-fetched year already uses, not a separate ad hoc identity scheme. No per-league flag gates this —
+  it's a plain "try harder before giving up" fallback, generic to any league that hits the same shape of
+  gap, exactly answering Morrie's "does this need a flag?" with no, since a flag would only be needed if
+  the fallback could ever be *wrong* to attempt, and trying an extra HTTP call that either helps or
+  cleanly returns nothing has no such failure mode.
+- **`year_range(config, span="history")`**, new in `config.py`, alongside the existing `"full"`/
+  `"box_score"` spans: reads `years.history_start` (falling back to `years.start` if absent, so a league
+  with nothing special configured is unaffected). `history.py` can recover data for seasons no other
+  report can touch at all (advanced stats/records/head-to-head/owner habits all need real per-week/
+  roster/draft data this endpoint doesn't have, confirmed by probing every other `view` parameter ESPN's
+  API accepts — `mMatchup`, `mBoxscore`, `mRoster`, `mDraftDetail`, `mSchedule` all come back with nothing
+  beyond the same team-record summary `mTeam` already has), so its usable range can legitimately start
+  earlier than `years.start`, without tempting every *other* step into wasting a live ESPN call every run
+  on years that can never succeed for them.
+- **`leagues/all-for-the-shiva/league_config.json`**: `years.history_start: 2014` (2014 is genuinely the
+  league's first season — 2013 404s on the legacy endpoint too, confirmed).
+- **`ignore/leagues/all-for-the-shiva/owner_map.json`**: filled in for all 12 team_ids, not just the 8
+  with a known 2026 owner. The 4 without one yet (7, 8, 11, 12 — pre-draft, unclaimed for 2026) get
+  initials derived from their **2025** team name (first word's + last word's initial, mirroring how a
+  real owner's initials are built from first/last name) rather than the 2026 placeholder name, per
+  instruction: `7` "Hurts to Lose Moore to Win" → `HW`, `8` "Irish's Chalupa Batman" → `IB`, `11` "Not the
+  Same I am a Marshawn" → `NM`, `12` "Mr You Are What You Feet" → `MF`.
+- **Team-id continuity is real but not perfect** — checked directly by comparing each team_id's owner
+  GUID between 2025 and 2026: 6 of the 8 currently-owned team_ids (1, 3, 4, 6, 9, 10) have the *same*
+  owner GUID both years; 2 (team_id 2 and 5) have a *different* GUID in 2025 than in 2026, meaning
+  whoever owns those slots today is not who owned them last season. Decided to key every historical row
+  by **team_id → current owner_map** uniformly anyway (not per-year GUID verification) — matches the
+  literal instruction ("use the team id and owner map... teams change"), is far simpler than tracking
+  per-year ownership handoffs the league itself doesn't surface anywhere, and is consistent with treating
+  a team_id as "the slot," same as how who-dat's owner_map has always worked.
+- **Retired**: `history_seed.json`, `scripts/seed_history_cache.py`, `lambda_function.py`'s
+  `_merge_cached_history_years()`, and `cache.py`'s `list_cached_years()` — all superseded by the live
+  fallback above, deleted rather than left as unused dead code. The seeded `leagues/854288221/cache/
+  history/*.json` objects were also removed from S3.
+- **Found and fixed one more real bug while validating this**: `build_history()`'s `Sacko` field
+  (`league.standings_weekly(...).index(team) + 1 == team_count`) doesn't check whether any games have
+  been played yet — for a season with zero games so far (e.g. all-for-the-shiva's 2026, pre-draft),
+  every team is tied at 0 but `.index()` still picks *someone* out of that tie and flags them Sacko,
+  which is meaningless before a single game has happened. `Champion` already avoided this (`final_
+  standing` is 0/unset pre-season, never `1`); `Sacko` needed the same explicit guard since it's computed
+  independently from weekly points, not from final standing. Fixed with a `season_started = any((t.wins
+  + t.losses) > 0 for t in league.teams)` guard. Caught by Morrie noticing all-for-the-shiva's site had
+  Sacko awarded for a team that hadn't played a single game.
+- Validated end to end, both stacks redeployed: `league_history.csv` now has 13 years (2014–2026) for
+  all-for-the-shiva with real `Owner ID`s (exactly the 12 team_ids, not ~80 team-name strings), real
+  Points For/Against, and correct per-owner career aggregation on the "All seasons" view (spot-checked:
+  Vandelay Industries/team_id 8 → `IB`, 8 seasons, real win total, 3 championships — previously
+  impossible to see correctly, since every prior row was keyed by the ever-changing team name instead of
+  the stable team_id); `Sacko` correctly `False` for every 2014–2026 row (no weekly data to compute it
+  honestly for 2014–2025; zero games played yet for 2026). Who-dat redeployed with the identical code and
+  confirmed byte-for-byte unchanged (13 years, 2013–2025, still 13 real per-season `Sacko` awards).
 
 ## Repo layout (this repo)
 

@@ -74,11 +74,18 @@ def year_range(config, span="full"):
       "full"       -> years.start .. years.end        (draft/season history)
       "box_score"  -> years.box_score_start .. years.end (needs box_scores(),
                        which ESPN doesn't reliably expose for older seasons)
+      "history"    -> years.history_start .. years.end (DESIGN.md decision #15h -
+                       history.py can recover standings-only data for seasons a
+                       migrated-from-another-platform league's other reports can't
+                       touch at all, via a legacy-endpoint fallback, so its usable
+                       range can start earlier than every other report's "start")
     """
     years = config["years"]
     end = years["end"]
     if span == "box_score":
         start = years.get("box_score_start", years["start"])
+    elif span == "history":
+        start = years.get("history_start", years["start"])
     else:
         start = years["start"]
     return range(start, end + 1)

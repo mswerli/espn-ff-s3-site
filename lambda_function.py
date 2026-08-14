@@ -52,7 +52,7 @@ from pathlib import Path
 
 import boto3
 
-from league_reports.cache import get_cached_year, list_cached_years, put_cached_year
+from league_reports.cache import put_cached_year
 from league_reports.config import load_all_config, year_range
 from league_reports.reports.advanced_history import build_advanced_history
 from league_reports.reports.advanced_history_v2 import build_advanced_history_v2_cached
@@ -137,53 +137,21 @@ def _archive_key(league_id, filename):
     return f"leagues/{league_id}/archive/{filename}"
 
 
-def _merge_cached_history_years(df, league_config, bucket):
-    """DESIGN.md decision #15h: some leagues have seasons ESPN's API can
-    never serve at all (migrated-from-NFL.com leagues - see decision #15f),
-    so build_history()'s per-year try/except silently drops them for good,
-    not just until a cache warms up. scripts/seed_history_cache.py can
-    manually seed leagues/<league_id>/cache/history/<year>.json (from a
-    human transcribing ESPN's own league-history *page*, which has this
-    data even though the API doesn't) - this merges any such seeded years
-    that build_history() didn't already cover, every run, so they survive
-    permanently instead of needing to be re-uploaded. A no-op for any league
-    with nothing seeded (get_cached_year returns None for every year), so
-    this is safe to run unconditionally for every league, not just the ones
-    that need it."""
-    import pandas as pd
-
-    league_id = league_config["league_id"]
-    fetched_years = set(df["Year"]) if not df.empty else set()
-    extra_rows = []
-    # list_cached_years(), not year_range(league_config) - a manually-seeded
-    # league's cached years (e.g. all-for-the-shiva's 2014-2025) can fall
-    # entirely outside league_config.json's own "years" range (deliberately
-    # narrowed to 2026 - decision #15f - so every *other* step doesn't waste
-    # an ESPN call every run on years that can never succeed live). The
-    # cache itself is the only reliable source of "what years are seeded."
-    for year in list_cached_years(bucket, league_id, "history"):
-        if year in fetched_years:
-            continue
-        cached = get_cached_year(bucket, league_id, "history", year)
-        if cached:
-            extra_rows.extend(cached)
-
-    if not extra_rows:
-        return df
-
-    merged = pd.concat([df, pd.DataFrame(extra_rows)], ignore_index=True)
-    return merged.sort_values(by=["Year", "Final Standing"])
-
-
 def _step_history(league_config, owner_map, creds, bucket):
+    # span="history", not "full" - DESIGN.md decision #15h: history.py can
+    # recover standings-only data for seasons a migrated-from-another-
+    # platform league's other reports can't touch at all (via
+    # build_history()'s legacy-endpoint fallback), so its usable range can
+    # start earlier than every other report's "years.start" - a league with
+    # nothing special configured (no "history_start") gets the exact same
+    # range as before, unchanged.
     df = build_history(
         league_id=league_config["league_id"],
-        years=year_range(league_config, span="full"),
+        years=year_range(league_config, span="history"),
         owner_map=owner_map,
         swid=creds["swid"],
         espn_s2=creds["espn_s2"],
     )
-    df = _merge_cached_history_years(df, league_config, bucket)
     _upload_csv(df, "league_history.csv", bucket)
 
 

@@ -26,35 +26,6 @@ def _cache_key(league_id, report, year):
     return f"leagues/{league_id}/cache/{report}/{year}.json"
 
 
-def list_cached_years(bucket, league_id, report):
-    """Returns every year actually cached for (league_id, report), sorted.
-
-    DESIGN.md decision #15h: unlike get_cached_year/put_cached_year (keyed
-    off a year the caller already knows to ask about - a season it fetched
-    or a season < years["current"]), this exists for manually-seeded years
-    a league's own league_config.json's "years" range doesn't cover at all
-    (e.g. scripts/seed_history_cache.py's transcribed pre-ESPN seasons for a
-    league migrated from NFL.com) - there's no "closed years" comparison to
-    derive the year list from, so it has to come from what's actually in
-    S3. Uses the same leagues/* prefix the ReadWriteLeaguesPrefix IAM policy
-    already grants s3:ListBucket on - no new IAM surface needed."""
-    import boto3
-
-    client = boto3.client("s3")
-    prefix = f"leagues/{league_id}/cache/{report}/"
-    years = []
-    paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            name = obj["Key"][len(prefix):]
-            if name.endswith(".json"):
-                try:
-                    years.append(int(name[:-len(".json")]))
-                except ValueError:
-                    continue
-    return sorted(years)
-
-
 def get_cached_year(bucket, league_id, report, year):
     """Returns the cached partial for (league_id, report, year), or None if
     nothing's cached yet for it."""
