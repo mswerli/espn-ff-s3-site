@@ -1,6 +1,8 @@
 # Incremental ESPN data pipeline — shared fetch, raw box-score cache, weekly partitioning
 
-Status: design only, nothing implemented yet. Branch: `docs/incremental-espn-pipeline`.
+Status: parts A–C implemented and validated (locally and against a real deployed parallel stack,
+rendering real data over public HTTP) — see "Validation strategy" below. Part D (frontend partitioning)
+not started. Branch: `docs/incremental-espn-pipeline`.
 
 This is decision #13 for [DESIGN.md](DESIGN.md) — kept as its own document rather than another
 DESIGN.md section because it's implementation-level enough (specific S3 keys, specific new modules,
@@ -168,6 +170,25 @@ day) with a payload like `{"league_ids": [...], "steps": ["head_to_head_v2", "ad
    for the head-to-head unplayed-week fix (part B) — that specific, called-out difference should be the
    only one, confirmed by eyeballing the diff rather than assuming. This tier is what actually exercises
    current-week/in-progress-game behavior the local replay can't.
+3. **Live render, branch-only**: eyeballing CSV diffs doesn't catch everything a real page render
+   would (e.g. anything downstream in `site/index.html`'s own parsing/rendering). `Makefile`'s
+   `deploy-branch` target stands up a **full second stack** (own bucket, Lambda, IAM roles, secret,
+   schedule — the schedule deployed `DISABLED`, so it never runs unattended) from the current git
+   branch, named/parameterized so it can never collide with or be mistaken for production. `render-branch`
+   then pushes `site/` + config to that stack's bucket and invokes every step needed for a fully
+   working page — including publishing the `_v2` steps' output to that stack's bucket **root**, not
+   just `shadow/`, via a new `AllowV2RootPublish` template parameter (default `"false"`, only ever
+   `"true"` on a branch stack — see template.yaml's parameter description for the exact safety
+   argument for why this can never leak into a production redeploy). The result: an actual public
+   HTTP URL serving the `_v2` pipeline's real output, confirmed end-to-end (`curl`ing the site and its
+   data files, not just checking upload succeeded) — not a substitute for tier 2's byte-diff, since
+   this tier only proves the data renders, not that it matches production, but it's the tier that
+   caught a real bug tier 1/2 couldn't have: the deployed Lambda's IAM role was missing `leagues/*`
+   read/write entirely (decision #12's grant was never actually built — see "New IAM surface" below),
+   and separately lacked a properly-scoped `s3:ListBucket`, which meant every *closed* year/week's
+   cache-miss came back as `403 AccessDenied` instead of `404 NoSuchKey` and got silently skipped
+   rather than computed — both invisible to local testing under a broader IAM user, both fixed in
+   `template.yaml` once a real deploy surfaced them.
 
 **Cutover criteria**: only after N consecutive clean live-shadow comparisons (a specific N to be
 agreed before starting — a handful of weekly cycles across live game days seems like the right order
@@ -205,18 +226,44 @@ bundled into the cutover itself.
 
 ## New IAM surface
 
-`leagues/*` (decision #12's existing grant) already covers the new `raw/` and `shadow/` sub-prefixes —
-no new IAM statement needed, same reasoning as decision #10a's cache prefix.
+`leagues/*` (decision #12's grant) covers the new `raw/`, `cache/`, and `shadow/` sub-prefixes — same
+reasoning as decision #10a's cache prefix, no separate statement needed per sub-prefix.
+
+**Correction**: this was originally written assuming decision #12's `leagues/*` grant already existed
+in `template.yaml`, since DESIGN.md had long since designed it. It hadn't actually been built —
+`TODO-backend.md`'s "Multi-league support" checklist was (and still is) unchecked. Discovered only once
+a real parallel stack was deployed and invoked (`Makefile`'s `deploy-branch`/`invoke-branch`): every
+`_v2` step failed against the real IAM role. Fixed directly in `template.yaml` (a new
+`ReadWriteLeaguesPrefix` policy on `DataGeneratorExecutionRole`) rather than left as a known gap, since
+nothing in this document works against a real deployment without it. Also required a properly-scoped
+`s3:ListBucket` (bucket ARN, `s3:prefix` condition limited to `leagues/*`) alongside `GetObject`/
+`PutObject` — without it, a `GetObject` against a not-yet-cached key comes back `403 AccessDenied`
+instead of `404 NoSuchKey` (S3 won't confirm-or-deny a key's existence to a caller with no `ListBucket`
+permission at all), which `league_reports/cache.py`/`box_score_cache.py` only special-case as
+`NoSuchKey` — an `AccessDenied` instead propagates as a real error, and every `_v2` step's per-year/
+per-week `try`/`except` quietly swallowed it as "skip this year/week," silently dropping data instead
+of computing it fresh. This is exactly the class of bug the "Live render, branch-only" validation tier
+above exists to catch — no amount of local scratch-bucket testing under a broader IAM user surfaced it.
 
 ## Testing checklist
 
-- [ ] `scripts/compare_v2.py`: legacy vs `_v2` output identical (or intentionally different, per the
-      one called-out head-to-head fix) for at least one fully-closed historical season
-- [ ] `box_score_cache.py`: a closed week produces zero ESPN calls on a second read; a week's cache
-      entry is fully overwritten (not appended to) on a re-run while it's still the current week
-- [ ] Invocation-local `League()` sharing: assert on call count/log output that a multi-step invocation
-      for one league/year constructs `League` exactly once, not once per step
-- [ ] Live shadow-vs-production diff clean for the agreed N cycles before cutover (criteria above)
+- [x] `scripts/compare_v2.py`: legacy vs `_v2` output identical (or intentionally different, per the
+      one called-out head-to-head fix) for at least one fully-closed historical season — done for all
+      three `_v2` reports across multiple closed seasons plus the current season
+- [x] `box_score_cache.py`: a closed week produces zero ESPN calls on a second read — confirmed (3
+      calls cold, 0 warm), including cross-*report* sharing (a week cached by `advanced_history_v2`
+      read by `weekly_summary_v2` with zero further ESPN calls), not just cross-run for one report
+- [x] Live render against a real deployed parallel stack (`deploy-branch`/`render-branch`): site
+      actually serves `_v2`-computed data over public HTTP, `curl`-confirmed, not just upload-confirmed
+- [ ] `box_score_cache.py`: a week's cache entry is fully overwritten (not appended to) on a re-run
+      while it's still the current week — not yet exercised against a genuinely in-progress week (the
+      real league's current configured season is already fully complete as of this writing)
+- [ ] Invocation-local `League()` sharing (part A): still not implemented even for the `_v2`-only scope
+      decided in the lambda_function.py wiring pass — each `_v2` step still constructs its own `League()`
+      per year
+- [ ] Live shadow-vs-production diff clean for the agreed N cycles before cutover (criteria above) —
+      the mechanism is built and proven to work end-to-end; the actual N-cycle observation window against
+      the real production schedule hasn't started
 - [ ] Post-cutover: confirm the production schedules' `succeeded`/`failed` reporting still keys
       correctly (decision #12's `f"{league_id}:{label}"` format) with the renamed step labels
 - [ ] Post-cleanup: confirm `shadow/` prefix and legacy-only code are actually gone, not just unused

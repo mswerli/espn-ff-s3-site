@@ -211,6 +211,16 @@ def _shadow_key(league_id, filename):
     return f"leagues/{league_id}/shadow/{filename}"
 
 
+def _v2_root_publish_enabled():
+    """FF_ALLOW_V2_ROOT_PUBLISH (template.yaml's AllowV2RootPublish
+    parameter, default "false") - see the parameter's Description for the
+    full rationale. False on every deploy except a branch stack's, so a
+    redeploy of production can never start serving still-being-validated
+    _v2 output as real site data just because this env var happened to be
+    left set."""
+    return os.environ.get("FF_ALLOW_V2_ROOT_PUBLISH", "false").lower() == "true"
+
+
 def _step_head_to_head_v2(league_config, creds, bucket):
     league_id = league_config["league_id"]
     df = build_head_to_head_v2_cached(
@@ -221,7 +231,12 @@ def _step_head_to_head_v2(league_config, creds, bucket):
         espn_s2=creds["espn_s2"],
         bucket=bucket,
     )
+    # Shadow upload is unconditional (decision #13) - the root-publish
+    # below is the opt-in, flag-gated *addition* on top of it, not a
+    # replacement for it.
     _upload_csv(df, "head_to_head_lifetime.csv", bucket, key=_shadow_key(league_id, "head_to_head_lifetime.csv"))
+    if _v2_root_publish_enabled():
+        _upload_csv(df, "head_to_head_lifetime.csv", bucket)
 
 
 def _step_advanced_history_v2(league_config, owner_map, creds, bucket):
@@ -239,6 +254,8 @@ def _step_advanced_history_v2(league_config, owner_map, creds, bucket):
     # seasons, so an empty result is expected/skipped, not an error.
     _upload_csv(df, "advanced_team_metrics.csv", bucket, skip_if_empty=True,
                 key=_shadow_key(league_id, "advanced_team_metrics.csv"))
+    if _v2_root_publish_enabled():
+        _upload_csv(df, "advanced_team_metrics.csv", bucket, skip_if_empty=True)
 
 
 def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket):
@@ -284,6 +301,11 @@ def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket):
 
     _upload_json(winners, "weekly_payout_winners.json", bucket,
                  key=_shadow_key(league_id, "weekly_payout_winners.json"))
+
+    if _v2_root_publish_enabled():
+        _upload_csv(efficiency_df, "weekly_efficiency_awards.csv", bucket)
+        _upload_json(survivor_result, "survivor_results.json", bucket)
+        _upload_json(winners, "weekly_payout_winners.json", bucket)
 
 
 # DESIGN.md decision #10b's step registry: one entry per _step_* function,
