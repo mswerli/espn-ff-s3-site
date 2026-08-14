@@ -1,8 +1,10 @@
 # Incremental ESPN data pipeline — shared fetch, raw box-score cache, weekly partitioning
 
-Status: parts A–C implemented and validated (locally and against a real deployed parallel stack,
-rendering real data over public HTTP) — see "Validation strategy" below. Part D (frontend partitioning)
-not started. Branch: `docs/incremental-espn-pipeline`.
+Status: parts A–C implemented, validated, and **cut over to production** — `DEFAULT_STEPS` and the
+weekly schedule run the `_v2` steps as of the `cutover-v2-weekly-run` branch (see "Cutover criteria"
+below for why the originally-planned observation window was skipped). Part D (frontend partitioning)
+not started. Built across `docs/incremental-espn-pipeline` (merged to `main`) and
+`cutover-v2-weekly-run`.
 
 This is decision #13 for [DESIGN.md](DESIGN.md) — kept as its own document rather than another
 DESIGN.md section because it's implementation-level enough (specific S3 keys, specific new modules,
@@ -190,16 +192,21 @@ day) with a payload like `{"league_ids": [...], "steps": ["head_to_head_v2", "ad
    rather than computed — both invisible to local testing under a broader IAM user, both fixed in
    `template.yaml` once a real deploy surfaced them.
 
-**Cutover criteria**: only after N consecutive clean live-shadow comparisons (a specific N to be
-agreed before starting — a handful of weekly cycles across live game days seems like the right order
-of magnitude, not a single run) does `lambda_function.py`'s `DEFAULT_STEPS` (decision #10b) and the
-production schedules' `Input` switch from the legacy step names to the `_v2` ones, and the legacy
-modules + `shadow/` prefix get deleted in a follow-up cleanup change. **Rollback**: since the legacy
-steps/modules are untouched throughout validation, rollback at any point before cutover is "stop
-invoking the `_v2` steps" — there is no migration to undo. Rollback after cutover is "point the
-schedules' `Input` back at the legacy step names," which only works for as long as the legacy modules
-haven't been deleted yet — that's the reason the cleanup deletion is a separate, later change and not
-bundled into the cutover itself.
+**Cutover criteria — decided, not what was originally planned above:** the N-consecutive-clean-cycles
+observation window described above was never actually run — zero live-shadow cycles happened before
+cutover. Explicit call: this is a hobby project, and the staged-rollout ceremony that plan was written
+for wasn't judged worth the wait, given how much of it (local diffs across many seasons, a live render
+on a real parallel stack, a full week-by-week replay of a real season) was already exercised through
+other means before this decision. `lambda_function.py`'s `DEFAULT_STEPS` and `WeeklyDataRefreshSchedule`'s
+`Input` switched straight to the `_v2` step names, and `template.yaml`'s `AllowV2RootPublish` default
+flipped from `"false"` to `"true"` in the same change, since a `_v2` step now needs to publish to the
+real bucket-root keys to be production's actual data path at all — without that flip, cutting over
+`DEFAULT_STEPS` alone would have made the site's data silently stop updating (worse than a visible
+break). The legacy modules and the `shadow/` prefix were deliberately **not** deleted as part of this —
+that cleanup is still a separate, later, optional change (the legacy `head_to_head`/`advanced_history`/
+`weekly_summary` steps stay fully callable by name), not bundled into the cutover. **Rollback**: point
+`DEFAULT_STEPS`/the schedule's `Input` back at the legacy step names — the legacy code was never
+touched or removed, so this is a plain revert, not a migration to undo.
 
 ## Rollout order
 

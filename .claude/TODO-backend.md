@@ -118,15 +118,27 @@ rationale in DESIGN.md decision #12.
       break once outputs move under `leagues/<league_id>/` — flagged in
       [TODO-frontend.md](TODO-frontend.md), not required for this backend item to be done
 
-## Incremental current-year refresh (DESIGN.md decision #13)
+## Incremental current-year refresh (DESIGN.md decision #13) — done, cut over to production
 
 Refines the current-year half of the "Incremental data generation" section above — closed-year caching
-there is unchanged. Full design, S3 layout, and the shadow-mode rollout mechanism (new `_v2` steps run
-alongside the production pipeline, publish to a `shadow/` prefix, get diffed against production before
-any cutover — nothing existing is touched until validated) live in
+there is unchanged. Full design, S3 layout, and rollout history (shared `League()` fetch, `head_to_head`
+derived from `Team` arrays with no per-week cost, a shared raw box-score cache, the shadow-mode
+validation mechanism, and the eventual cutover) live in
 [DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md); this is just the pointer.
-Not started — do this after the "Incremental data generation" and "Multi-league support" sections
-above land, since it builds on both (the `leagues/<league_id>/` prefix and the `STEPS` registry).
+
+Turned out **not** to need the "Incremental data generation" and "Multi-league support" sections above
+to land first, despite the original note here assuming it did — it only needed the one specific piece
+those sections would have provided (the `leagues/<league_id>/` prefix's IAM grant), which got pulled
+forward directly into `template.yaml` rather than waiting on the rest of decision #10/#12's scope
+(the `STEPS` registry itself also ended up minimal, single-league, built alongside decision #13 rather
+than as its own prerequisite). Those two sections above are both still unstarted as of this note.
+
+`DEFAULT_STEPS` and the weekly schedule's `Input` now run `head_to_head_v2`/`advanced_history_v2`/
+`weekly_summary_v2` in place of their legacy counterparts — cut over deliberately without the
+originally-planned N-cycle live-shadow observation window (a hobby project's call, not an oversight;
+see DESIGN-incremental-espn-pipeline.md's "Cutover criteria" for the full reasoning). Legacy
+`head_to_head`/`advanced_history`/`weekly_summary` modules and steps are untouched and still callable
+by name — deleting them is optional future cleanup, not required.
 
 ## Deferred / later
 

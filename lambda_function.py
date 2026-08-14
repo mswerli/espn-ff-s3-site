@@ -10,21 +10,23 @@ from.
 `event.get("steps")` selects which steps run (DESIGN.md decision #10b): a
 list of STEPS keys, e.g. `{"steps": ["head_to_head_v2"]}`; an unknown name
 is a hard ValueError, not a silent skip. No "steps" key at all falls back
-to DEFAULT_STEPS - today's implicit behavior (every legacy step except
-owner_habits; none of the _v2 steps are ever implicit, matching
-owner_habits' own reasoning: something that should only run when
-explicitly asked for shouldn't hide in a default).
+to DEFAULT_STEPS.
 
-The three `_v2` steps (head_to_head_v2, advanced_history_v2,
-weekly_summary_v2) are .claude/DESIGN-incremental-espn-pipeline.md decision
-#13's shadow-mode path: same computation as their legacy counterparts, cache-
-aware (league_reports.cache + league_reports.box_score_cache), but uploaded
-to a separate `leagues/<league_id>/shadow/` prefix - never the real
-published keys - so they can run alongside the unmodified legacy steps on
-the existing schedule and get diffed against production before any
-cutover. Not scoped to multi-league (DESIGN.md decision #12) yet - like the
-legacy steps, league_id comes from the single configured league_config.json,
-not from an event["league_ids"] list.
+Cutover (see .claude/DESIGN-incremental-espn-pipeline.md decision #13):
+DEFAULT_STEPS runs the `_v2` builds (head_to_head_v2, advanced_history_v2,
+weekly_summary_v2) in place of their legacy counterparts (head_to_head,
+advanced_history, weekly_summary) - cache-aware (league_reports.cache +
+league_reports.box_score_cache), publishing to the real bucket-root keys
+via AllowV2RootPublish=true (template.yaml's default as of this cutover),
+same filenames the site already fetches. `history` and `records` have no
+_v2 replacement and stay legacy; `owner_habits` stays excluded from
+DEFAULT_STEPS same as always (draft picks only change on draft day, never
+implicit). The legacy `head_to_head`/`advanced_history`/`weekly_summary`
+step functions and their v1 report modules are untouched and still
+callable by name (`{"steps": ["head_to_head"]}`) if ever needed - this was
+a step-registry cutover, not a code deletion. Not scoped to multi-league
+(DESIGN.md decision #12) yet - league_id comes from the single configured
+league_config.json, not an event["league_ids"] list.
 
 Config input: league_reports.config.load_all_config(), which (per
 FF_CONFIG_BACKEND) reads league_config.json/owner_map.json/
@@ -340,17 +342,16 @@ STEP_LABELS = {
     "owner_habits": "Draft habits",
     "records": "All-time records",
     "weekly_summary": "Weekly summaries / payouts / survivor pool",
-    "head_to_head_v2": "Head-to-head records (v2, shadow)",
-    "advanced_history_v2": "Advanced team metrics (v2, shadow)",
-    "weekly_summary_v2": "Weekly summaries / payouts / survivor pool (v2, shadow)",
+    "head_to_head_v2": "Head-to-head records (v2)",
+    "advanced_history_v2": "Advanced team metrics (v2)",
+    "weekly_summary_v2": "Weekly summaries / payouts / survivor pool (v2)",
 }
 
-# Today's implicit "run everything" behavior, minus owner_habits (draft
-# picks only change on draft day - never implicit, decision #10b) and minus
-# every _v2 step (shadow-mode steps are opt-in only, invoked explicitly via
-# event["steps"] - never mixed into an unattended run until decision #13's
-# cutover criteria are met).
-DEFAULT_STEPS = ["history", "head_to_head", "advanced_history", "records", "weekly_summary"]
+# Cutover (decision #13): head_to_head/advanced_history/weekly_summary run
+# via their _v2 replacements now, not the legacy modules. history/records
+# have no _v2 counterpart and stay legacy. owner_habits stays excluded
+# (draft picks only change on draft day - never implicit, decision #10b).
+DEFAULT_STEPS = ["history", "head_to_head_v2", "advanced_history_v2", "records", "weekly_summary_v2"]
 
 
 def handler(event, context):

@@ -91,26 +91,33 @@ Parameters:
 
   AllowV2RootPublish:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues:
       - "true"
       - "false"
     Description: >
-      Defaults to "false" - the _v2 steps (DESIGN-incremental-espn-pipeline.md
-      decision #13) always publish to leagues/<league_id>/shadow/, never the
-      real published bucket-root keys, regardless of this parameter; that
-      part is unconditional and this flag doesn't touch it. What this flag
-      controls is a *second*, additional upload each _v2 step makes to the
-      real bucket-root filename (head_to_head_lifetime.csv,
+      The _v2 steps (DESIGN-incremental-espn-pipeline.md decision #13) always
+      publish to leagues/<league_id>/shadow/, never the real published
+      bucket-root keys, regardless of this parameter; that part is
+      unconditional and this flag doesn't touch it. What this flag controls
+      is a *second*, additional upload each _v2 step makes to the real
+      bucket-root filename (head_to_head_lifetime.csv,
       advanced_team_metrics.csv, weekly_efficiency_awards.csv,
-      survivor_results.json, weekly_payout_winners.json) - off by default so
-      a redeploy of the production stack can never accidentally start
-      serving still-being-validated _v2 output as real site data. Override
-      to "true" only for a parallel/branch stack (Makefile's deploy-branch
-      sets this automatically) where "bucket root" isn't production's real
-      published data at all, so there's nothing to protect - the whole
-      point there is to actually render the _v2 output on that stack's site
-      to eyeball it, not just diff CSVs locally.
+      survivor_results.json, weekly_payout_winners.json).
+
+      Defaults to "true" as of the cutover decision below (DEFAULT_STEPS now
+      runs the _v2 steps in place of their legacy counterparts) - this HAS
+      to be true for production, or the _v2 steps would only write shadow/
+      and the site's real data would simply stop updating, silently, which
+      is worse than a visible break. Pre-cutover this defaulted to "false"
+      (see git history) specifically to keep a production redeploy from ever
+      accidentally serving still-being-validated output as real data; that
+      concern is what this project explicitly decided to skip validating
+      against (a hobby project, not worth the staged-rollout ceremony) - see
+      DESIGN-incremental-espn-pipeline.md's cutover section. Override to
+      "false" only if you want a temporary rollback to shadow-only publishing
+      without touching DEFAULT_STEPS/code - not the normal path back to
+      legacy behavior, which is reverting DEFAULT_STEPS itself.
 
 Resources:
   # --- Static site bucket (frontend-owned; .claude/TODO-frontend.md "Infrastructure") ----
@@ -380,6 +387,14 @@ Resources:
       Target:
         Arn: !GetAtt DataGeneratorFunction.Arn
         RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        # Explicit Input rather than an empty event, per decision #10b's own
+        # reasoning: a schedule shouldn't lean on the handler's DEFAULT_STEPS
+        # fallback (that fallback exists for manual/console invokes). Kept
+        # in sync with lambda_function.py's DEFAULT_STEPS by hand - matches
+        # it exactly as of the decision #13 cutover (head_to_head_v2/
+        # advanced_history_v2/weekly_summary_v2 in place of their legacy
+        # counterparts; history/records stay legacy; owner_habits excluded).
+        Input: '{"steps": ["history", "head_to_head_v2", "advanced_history_v2", "records", "weekly_summary_v2"]}'
 
 Outputs:
   SiteBucketWebsiteURL:
