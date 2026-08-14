@@ -7,55 +7,73 @@ Phase 1 (Prep), the Lambda handler, and its Lambda-side `template.yaml` infrastr
 deployed — see DESIGN.md decisions #3/#4/#6/#7 for the rationale, `git log` for when, and
 [[espn-ff-live-infra]] memory for what's actually live today.
 
-## Testing
+## Testing — done
 
-- [ ] Invoke locally (`sam local invoke` or a direct Python call) against a **scratch S3
-      prefix/bucket**, not the live site bucket
-- [ ] Measure total runtime for a full run (all 6 reports × full configured year range) — check
-      against the 900s Lambda cap before relying on it in prod
-- [ ] Confirm output is byte-identical (or intentionally different — e.g. sort order) to what the
-      local scripts produce for the same config
-- [ ] Only point it at the real site bucket after a scratch-prefix run has been eyeballed
+- [x] Invoke locally (`sam local invoke` or a direct Python call) against a **scratch S3
+      prefix/bucket**, not the live site bucket — exercised extensively via `espn-ff-site-scratch-*`
+      throughout decision #13's work, plus a full parallel branch stack for real Lambda/IAM testing
+- [x] Measure total runtime for a full run — cold-cache multi-season runs observed directly (a few
+      minutes for a 13-season cold `advanced_history_v2`/`head_to_head_v2` run), comfortably inside
+      the 900s cap; no formal profiling doc beyond that, not felt necessary at this data volume
+- [x] Confirm output is byte-identical (or intentionally different — e.g. sort order) to what the
+      local scripts produce for the same config — `scripts/compare_v2.py` across multiple seasons for
+      every report that got a `_v2` rewrite; one intentional, documented difference (head_to_head's
+      unplayed-week fix) and one incidental, benign one (floating-point summation-order noise, invisible
+      after `toFixed(2)`) found and written up, not silently ignored
+- [x] Only point it at the real site bucket after a scratch-prefix run has been eyeballed — production
+      wasn't touched until after local + branch-stack + local-replay validation; a real test invocation
+      against production itself confirmed the final cutover end-to-end (`curl`-verified live data)
 
-## Incremental data generation (DESIGN.md decision #10)
+## Incremental data generation (DESIGN.md decision #10) — mostly done, via decision #13
 
-Promoted out of "Deferred / later" — this is the current work item. Full design/rationale in
-DESIGN.md decision #10; this is just the ordered checklist.
+Promoted out of "Deferred / later" a while back; most of it ended up landing as part of decision #13's
+work (see that section below and [DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md))
+rather than as its own separate pass. Rationale for what's still open stays in DESIGN.md decision #10.
 
-- [ ] `league_reports/cache.py`: S3-only per-year cache (`get_cached_year(report, year)` /
-      `put_cached_year(report, year, data)`) at `s3://<bucket>/cache/<report>/<year>.json`, boto3
-      imported lazily like `config.py`'s S3 backend
-- [ ] `lambda_function.py`: `STEPS` registry (one entry per existing `_step_*`) +
-      `event.get("steps")` selection in `handler()`, unknown names raise `ValueError`, no `steps` key
-      falls back to `DEFAULT_STEPS` (everything except `owner_habits`)
-- [ ] `league_reports/reports/history.py` + `advanced_history.py`: split the per-year loop body into a
-      `compute_*_year(...)` helper; orchestrator (in `lambda_function.py`) does cache-or-compute per
-      year (closed years = `year < league_config["years"]["current"]`) and concatenates before
-      building the DataFrame
-- [ ] `league_reports/reports/head_to_head.py` + `records.py`: refactor from "reduce across all years in one
-      pass" to "per-year partial + merge step" so each year's partial is independently cacheable —
-      more invasive than the above two, do it second; drop `records.py`'s apparently-dead
-      `player_season_totals` accumulator while in there (confirm it's truly unread first)
-- [ ] `owner_habits.py`: no cache needed — it's moving to on-demand-only (see steps registry above),
-      so the re-fetch cost only hits the rare manual invoke
-- [ ] `template.yaml`: replace `WeeklyDataRefreshSchedule` with two `AWS::Scheduler::Schedule`
-      resources (live tier: `weekly_summary` only, several times/game day; weekly tier: everything
-      except `owner_habits`, once/week) per DESIGN.md decision #10's cadence table, each with an
-      explicit `Input`; add a `ScheduleState` parameter to each for offseason toggling; no schedule
-      resource for `owner_habits` at all
-- [ ] `template.yaml`: add `s3:GetObject`/`s3:PutObject` on `arn:aws:s3:::${SiteBucketName}/cache/*`
-      to `DataGeneratorExecutionRole`
-- [ ] Testing: cached-vs-live output byte-identical to today's full-refetch output for the same
-      config; a closed year produces zero ESPN calls on a second run once cached; `owner_habits`
-      never appears in a scheduled run, only a manual-invoke one; confirm live-tier cron hours with
-      Morrie against actual game-day timing (starting guess in DESIGN.md, not confirmed)
+- [x] `league_reports/cache.py`: built — `get_cached_year`/`put_cached_year`/`get_or_compute_year` at
+      `leagues/<league_id>/cache/<report>/<year>.json` (the multi-league-shaped path, pulled forward
+      from decision #12 rather than the bucket-root `cache/<report>/<year>.json` originally sketched
+      here), boto3 imported lazily
+- [x] `lambda_function.py`: `STEPS` registry + `event.get("steps")` selection in `handler()` — built,
+      unknown names raise `ValueError`, no `steps` key falls back to `DEFAULT_STEPS`
+- [~] `advanced_history.py`: got the per-year cache-or-compute split, via `advanced_history_v2.py`
+      (`compute_advanced_history_year()` + `build_advanced_history_v2_cached()`) — done.
+      `history.py` did **not** get this treatment, deliberately: decision #13 found it doesn't loop
+      per-week/per-year at all (`team.wins`/`points_for`/etc. already come back cumulative from a
+      single `get_league()` call), so there's no re-fetch cost worth caching — it stays fully legacy,
+      full-refetch every run, on purpose
+- [~] `head_to_head.py`: done, but via a better mechanism than the one planned here — turned out to
+      need **no per-week cache at all** (derives lifetime results straight from `Team.scores/schedule/
+      outcomes`, already populated by the one `get_league()` call), just the same per-year cache as
+      advanced_history for closed-year re-fetch avoidance. `records.py` was **not** touched — still
+      needs the "reduce across all years" → "per-year partial + merge" refactor this item originally
+      called for, including confirming and dropping the apparently-dead `player_season_totals`
+      accumulator; genuinely still open
+- [x] `owner_habits.py`: no cache needed, confirmed — excluded from `DEFAULT_STEPS`, on-demand-only via
+      the `STEPS` registry
+- [ ] `template.yaml`: **still open** — only one `WeeklyDataRefreshSchedule` exists; the live/weekly
+      cadence-tier split (live tier: `weekly_summary` several times/game day; weekly tier: everything
+      else once/week) was never built. Everything currently runs on the single weekly Tuesday-morning
+      schedule, `_v2` steps included
+- [x] `template.yaml` cache IAM grant: done differently than sketched — one `s3:GetObject`/
+      `s3:PutObject` statement on `leagues/*` (pulled forward from decision #12) covers `cache/`, `raw/`,
+      and any future per-league sub-prefix in one grant, not a `cache/*`-only statement
+- [~] Testing: cached-vs-live byte-identical — done, extensively, for head_to_head/advanced_history/
+      weekly_summary (decision #13's testing checklist). **Still open**: live-tier cron hours were
+      never confirmed with Morrie against actual game-day timing — moot until the live/weekly split
+      above is actually built
 
-## Weekly-summary backfill + retention (DESIGN.md decision #11)
+## Weekly-summary backfill + retention (DESIGN.md decision #11) — still not started
 
 Same pass as the step registry item above (`_step_weekly_summary` is the thing being touched either
 way) — do this alongside, not after. Full rationale in DESIGN.md decision #11. Key patterns below are
 already written in their multi-league form (decision #12) since #10/#11/#12 are being built together —
 see that section below.
+
+Genuinely untouched by decision #13's work — `_step_weekly_summary_v2` hardcodes
+`year = league_config["years"]["current"]`, no event-level `year` override, and no `archive/`-prefix
+season-stamped copies exist. `league_reports/cache.py`/`box_score_cache.py` (decision #13) are exactly
+the primitives this item would build on, though — a real head start if this gets picked up.
 
 - [ ] `_step_weekly_summary` (and `handler()`'s event handling): accept an optional `year` in the
       event payload (`{"league_ids": [...], "steps": ["weekly_summary"], "year": 2024}`), defaulting to
@@ -81,11 +99,19 @@ see that section below.
       files as a past-seasons browser — flag for [TODO-frontend.md](TODO-frontend.md) if wanted, not
       required for this item to be done
 
-## Multi-league support (DESIGN.md decision #12)
+## Multi-league support (DESIGN.md decision #12) — still not started
 
 Build alongside the two sections above, not after — `league_reports/cache.py` and `_step_weekly_summary`'s
 archive-write paths should take `league_id` from the start rather than being retrofitted. Full
 rationale in DESIGN.md decision #12.
+
+Partial overlap worth knowing about: the `leagues/<league_id>/` prefix shape below is already live in
+production (`league_reports/cache.py`/`box_score_cache.py` write `leagues/885349/cache/...` and
+`leagues/885349/raw/...` today, and `DataGeneratorExecutionRole` already has the `leagues/*` grant this
+section calls for) — but only for the one hardcoded league `league_config.json` points at. None of the
+actual multi-league machinery below (`event["league_ids"]`, the nested per-league loop, per-league
+config-file paths, the bucket-root → `leagues/<league_id>/` migration for the *published* CSV/JSON
+outputs) exists yet — those outputs are still flat at the bucket root, not under a `leagues/` prefix.
 
 - [ ] `league_reports/config.py`: add `league_id` to every S3-backend function
       (`get_league_config_from_s3`, `get_owner_map_from_s3`, `get_payouts_config_from_s3`,
@@ -131,7 +157,9 @@ to land first, despite the original note here assuming it did — it only needed
 those sections would have provided (the `leagues/<league_id>/` prefix's IAM grant), which got pulled
 forward directly into `template.yaml` rather than waiting on the rest of decision #10/#12's scope
 (the `STEPS` registry itself also ended up minimal, single-league, built alongside decision #13 rather
-than as its own prerequisite). Those two sections above are both still unstarted as of this note.
+than as its own prerequisite). The actual multi-league feature (per-league config/outputs,
+`event["league_ids"]`) is still fully unstarted, as noted in that section above — only the IAM/prefix
+groundwork got pulled forward.
 
 `DEFAULT_STEPS` and the weekly schedule's `Input` now run `head_to_head_v2`/`advanced_history_v2`/
 `weekly_summary_v2` in place of their legacy counterparts — cut over deliberately without the
@@ -139,6 +167,15 @@ originally-planned N-cycle live-shadow observation window (a hobby project's cal
 see DESIGN-incremental-espn-pipeline.md's "Cutover criteria" for the full reasoning). Legacy
 `head_to_head`/`advanced_history`/`weekly_summary` modules and steps are untouched and still callable
 by name — deleting them is optional future cleanup, not required.
+
+**Fully closed out**: a real test invocation against production itself (not just the branch stack)
+succeeded end-to-end post-cutover — all 5 requested steps green, fresh root-key data confirmed live on
+the public site via `curl`. The shadow-mode dual write and its `AllowV2RootPublish` flag were then
+retired entirely (no longer serving any purpose once cutover was proven) — each `_v2` step now writes
+to exactly one place, same as every legacy step always has; the leftover `shadow/` objects were deleted
+from the production bucket. The `espn-ff-s3-site-docs-incremental-esp` parallel branch stack used for
+validation has been fully torn down (stack, bucket, and Lambda all confirmed gone) — nothing left
+running or costing money beyond the one production stack.
 
 ## Deferred / later
 
