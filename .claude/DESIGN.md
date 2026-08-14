@@ -953,6 +953,49 @@ an empty list — already exactly what the front end expects when nothing qualif
 (no template/rendering change needed, per 15d's "already templated" finding). `weekly_efficiency_awards`
 and `survivor_results` are untouched by this — those aren't "payouts" and every league gets them.
 
+#### 15h. Manually-seeded history cache for seasons ESPN's API can never serve
+
+Decision #15f's `years: 2026`-only config for all-for-the-shiva was correct for every *live-fetched*
+report, but the user separately had (and provided) ESPN's own **league-history page**
+(`fantasy.espn.com/football/league/history?leagueId=854288221`) — which, unlike the API, *does* still
+show final standings/win-loss records for 2014–2025, ESPN's own UI apparently having access to data the
+public API endpoints this codebase calls don't expose (or don't expose in a shape `espn_api` can parse —
+see 15f). Real data, not fabricated, just sourced by a human reading ESPN's website instead of the API.
+
+- **`leagues/<slug>/history_seed.json`**: committed, human-transcribed `{year: [row, ...]}`, one row per
+  team matching `build_history()`'s exact dict shape. Only `Year`, `Owner Name` (the *team* name — no
+  owner-per-team-per-year mapping exists for these seasons, so team name is the best available
+  identifier, not a real person), `Wins`, `Losses`, and `Final Standing` are derivable from the page;
+  `Owner ID`, `Points For`, `Points Against`, and `Sacko` are zeroed/`false` rather than guessed, per
+  explicit instruction. `Champion` is derived (`Final Standing == 1`) and cross-checked against the
+  page's own champion badge for every year — matched all 12.
+- **`scripts/seed_history_cache.py <slug>`**: pushes `history_seed.json` into
+  `s3://<bucket>/leagues/<league_id>/cache/history/<year>.json` via `cache.py`'s existing
+  `put_cached_year` — the same cache prefix decision #10a already established, just populated by a human
+  transcription instead of a live ESPN fetch. Idempotent, safe to re-run after editing the seed file.
+- **`lambda_function.py`'s `_step_history`** gained `_merge_cached_history_years()`: after
+  `build_history()`'s live fetch (which still runs every time, and still silently drops any year it
+  can't reach — unchanged), it merges in any cached year the live fetch didn't already cover. A no-op
+  for any league with nothing seeded, so it runs unconditionally, not gated per-league.
+- **`list_cached_years(bucket, league_id, report)`**, new in `cache.py`: the merge deliberately does
+  **not** loop over `year_range(league_config, span="full")` to decide which years to check — that range
+  is all-for-the-shiva's live-fetchable years only (`2026`, by 15f's design), and seeding a manually-
+  transcribed year is specifically for years *outside* that range. `list_cached_years` instead lists
+  whatever's actually under `leagues/<league_id>/cache/<report>/` in S3 (an `s3:ListBucket` call the
+  `ReadWriteLeaguesPrefix` IAM policy already covers — no new IAM surface). Caught by testing against the
+  real deployed stack: the first deploy of this feature silently produced zero merged rows because it
+  used `year_range()`, which for this league is narrowed to exactly the one year that needs no merging.
+- Applies to any report, not just `history` — `cache.py`'s prefix scheme was already per-report
+  (`leagues/<id>/cache/<report>/<year>.json`); only `history` has a merge step wired up so far because
+  it's the only report ESPN's own UI happens to expose a non-API path for. `advanced_history`/`records`/
+  `head_to_head`/`owner_habits` all need real box-score/roster/draft data no webpage transcription can
+  reconstruct, so they stay empty for these seasons (confirmed: that's genuinely fine, the front end
+  degrades to "nothing to show," not a crash — decision #15f's empty-DataFrame fixes cover exactly this).
+- Validated: `league_history.csv` now has 13 years (2014–2026) for all-for-the-shiva, exactly matching
+  the transcribed page (spot-checked 2025: 12 teams, correct records, correct champion); who-dat
+  redeployed with the same code and confirmed unchanged (13 years, 2013–2025 — `list_cached_years`
+  correctly returns nothing for a league with no seeded cache, so the merge is a true no-op there).
+
 ## Repo layout (this repo)
 
 ```
