@@ -15,10 +15,27 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]  # project_root
 
+# DESIGN.md decision #15b: which league's leagues/<slug>/ directory local
+# scripts read by default. FF_LEAGUE defaults to "who-dat" - this repo's
+# original (and, until decision #15, only) league - so every existing local
+# script (scripts/run_all.py, compare_v2.py, ...) keeps working unchanged
+# with no env var set. Testing a second league locally is
+# `FF_LEAGUE=<slug> python scripts/run_all.py`. Same env-var-driven-default
+# pattern FF_CONFIG_BACKEND already uses below for local-vs-S3 selection,
+# not a new mechanism.
+#
+# espn_creds.json stays a single shared file, not per-league (decision
+# #12c's reasoning still holds - one ESPN login is a member of every league
+# this repo drives). owner_map.json holds real names, so it lives under
+# ignore/leagues/<slug>/ rather than the committed leagues/<slug>/ -
+# league_config.json/weekly_payouts_config.json hold no personal data and
+# are committed.
+ACTIVE_LEAGUE = os.environ.get("FF_LEAGUE", "who-dat")
+
 CREDS_PATH = BASE_DIR / "ignore" / "espn_creds.json"
-OWNER_MAP_PATH = BASE_DIR / "ignore" / "owner_map.json"
-LEAGUE_CONFIG_PATH = BASE_DIR / "league_config.json"
-PAYOUTS_CONFIG_PATH = BASE_DIR / "config" / "weekly_payouts_config.json"
+OWNER_MAP_PATH = BASE_DIR / "ignore" / "leagues" / ACTIVE_LEAGUE / "owner_map.json"
+LEAGUE_CONFIG_PATH = BASE_DIR / "leagues" / ACTIVE_LEAGUE / "league_config.json"
+PAYOUTS_CONFIG_PATH = BASE_DIR / "leagues" / ACTIVE_LEAGUE / "weekly_payouts_config.json"
 
 
 def get_credentials(path=CREDS_PATH):

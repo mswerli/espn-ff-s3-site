@@ -32,11 +32,11 @@ bucket-side resources and don't reformat or restructure sections you don't own.
   `league_history.csv`, `head_to_head_lifetime.csv`, `advanced_team_metrics.csv`,
   `all_time_records.csv`, `most_drafted_players.csv`, `weekly_efficiency_awards.csv`,
   `survivor_results.json`, `weekly_payout_winners.json`.
-- **`league_config.json` is not part of `site/`.** Its canonical copy lives at the repo root
-  (matching `league_reports/config.py`'s `LEAGUE_CONFIG_PATH`, which the backend depends on) — the deploy
-  step copies it to the bucket root as an explicit `aws s3 cp`, separate from the `site/` sync.
-  Don't move the file into `site/` to simplify the sync command; that breaks the backend's config
-  loading.
+- **`league_config.json` is not part of `site/`.** Its canonical copy lives at
+  `leagues/<slug>/league_config.json` (DESIGN.md decision #15a; matching `league_reports/config.py`'s
+  `LEAGUE_CONFIG_PATH`, which the backend depends on) — `make publish-site-league LEAGUE=<slug>` copies
+  it to that league's bucket root as an explicit `aws s3 cp`, separate from the `site/` sync. Don't
+  move the file into `site/` to simplify the sync command; that breaks the backend's config loading.
 - **Local preview is currently broken**: `site/index.html` lives in `site/`, but the Lambda/local
   scripts write generated CSV/JSON to the repo root via `league_reports/config.py`'s `output_path()`, so
   relative `fetch()`s 404 when previewing locally. This needs a decision (repoint `output_path()` at

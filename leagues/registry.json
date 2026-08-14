@@ -1,0 +1,12 @@
+{
+  "who-dat": {
+    "stack_name": "espn-ff-s3-site",
+    "function_name": "espn-ff-data-generator",
+    "site_bucket": "espn-ff-site-217412666418"
+  },
+  "all-for-the-shiva": {
+    "stack_name": "espn-ff-s3-site-all-for-the-shiva",
+    "function_name": "espn-ff-data-generator-all-for-the-shiva",
+    "site_bucket": "espn-ff-site-217412666418-all-for-the-shiva"
+  }
+}

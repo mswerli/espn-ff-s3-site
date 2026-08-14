@@ -50,10 +50,17 @@ import pandas as pd
 from league_reports.box_score_cache import get_box_scores
 from league_reports.espn_client import get_league
 
+# DESIGN.md decision #15f: this used to hardcode who-dat's own inside-joke
+# trophy names as the fallback for *every* league's "awards" block, which
+# only ever mattered while who-dat was the only league - it always supplied
+# its own "awards" block (league_config.json), so the fallback was dead code
+# in practice, not a real default. Now that a second league exists without
+# an "awards" block of its own, a generic fallback is the correct default;
+# who-dat's own config is unaffected since it never reaches this fallback.
 DEFAULT_AWARDS = {
-    "top_score": "🔥 The Regression Incoming Plaque",
-    "bottom_score": "🧱 The Razz Memorial Crawlspace Trophy",
-    "least_efficient": "🧠 Staniel's Should’ve Played My Bench Golden Clipboard",
+    "top_score": "Top Score",
+    "bottom_score": "Bottom Score",
+    "least_efficient": "Least Efficient",
 }
 
 
@@ -243,9 +250,17 @@ def resolve_payout_rules(payout_config, year):
     additive, not a schema migration). Each year's entry, if present, is a
     complete week->rule map on its own (same shape as "weekly_payouts"
     itself) - no per-week merging with the default, to keep "what rules
-    applied in year X" answerable by reading one block instead of two."""
+    applied in year X" answerable by reading one block instead of two.
+
+    DESIGN.md decision #15g: "weekly_payouts" itself is optional (.get, not
+    a hard key lookup) - not every league runs weekly payouts. An absent or
+    empty "weekly_payouts" means no week ever matches a rule below, so this
+    just quietly produces zero payout winners for the whole season instead
+    of a KeyError - the front end already renders that as "nothing to show"
+    (decision #15d), no separate "this league doesn't do payouts" flag
+    needed anywhere."""
     by_year = payout_config.get("weekly_payouts_by_year", {})
-    return by_year.get(str(year), payout_config["weekly_payouts"])
+    return by_year.get(str(year), payout_config.get("weekly_payouts", {}))
 
 
 def compute_weekly_payout_week(league, league_id, year, week, payout_config, bucket, is_closed):
@@ -266,6 +281,14 @@ def compute_weekly_payout_week(league, league_id, year, week, payout_config, buc
     def add_points(players):
         return sum(p['points'] or 0 for p in players)
 
+    # DESIGN.md decision #15e: an optional per-rule "label" overrides the
+    # payout type's default display text, so a league can call its own
+    # payout something other than the generic name below without a code
+    # change. Falsy (missing/empty) label falls back to the same hardcoded
+    # defaults every league saw before this - byte-identical output for an
+    # unedited config.
+    label = rule.get("label")
+
     winners = []
 
     for box in box_scores:
@@ -285,7 +308,7 @@ def compute_weekly_payout_week(league, league_id, year, week, payout_config, buc
                     "owner": owner,
                     "points": total,
                     "players": [p['name'] for p in filtered],
-                    "text": "Highest Scoring Team"
+                    "text": label or "Highest Scoring Team"
                 })
 
             elif payout_type == "top_player_overall":
@@ -295,7 +318,7 @@ def compute_weekly_payout_week(league, league_id, year, week, payout_config, buc
                     "owner": owner,
                     "points": top['points'],
                     "players": [top['name']],
-                    "text": "Top Individual Player Score"
+                    "text": label or "Top Individual Player Score"
                 })
 
             elif payout_type == "top_slot":
@@ -316,7 +339,7 @@ def compute_weekly_payout_week(league, league_id, year, week, payout_config, buc
                         "owner": owner,
                         "points": max_points,
                         "players": [p['name'] for p in max_combo],
-                        "text": f"Top {', '.join([f'{v}×{k}' for k, v in slot_counts.items()])} Score"
+                        "text": label or f"Top {', '.join([f'{v}×{k}' for k, v in slot_counts.items()])} Score"
                     })
 
             elif payout_type == "top_slot_combo":
@@ -337,7 +360,7 @@ def compute_weekly_payout_week(league, league_id, year, week, payout_config, buc
                         "owner": owner,
                         "points": total,
                         "players": [p['name'] for p in selected],
-                        "text": f"Top Combo: {', '.join([f'{v}×{k}' for k, v in slot_counts.items()])}"
+                        "text": label or f"Top Combo: {', '.join([f'{v}×{k}' for k, v in slot_counts.items()])}"
                     })
 
     if not winners:

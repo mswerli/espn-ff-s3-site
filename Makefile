@@ -47,47 +47,55 @@ build-DataGeneratorFunction:
 # pushes infra + Lambda code, never arbitrary files like index.html/style.css
 # or league_config.json, so publishing those is its own explicit step.
 #
-# STACK_NAME/AWS_REGION default to this project's actual deployed stack -
-# override on the command line (e.g. `make sync-site STACK_NAME=other`) if
-# ever deploying a second stack (e.g. a scratch/staging one).
-STACK_NAME ?= espn-ff-s3-site
+# LEAGUE selects which leagues/<slug>/ directory's config gets pushed, and
+# which deployed stack/bucket/function it goes to - looked up from
+# leagues/registry.json rather than hardcoded (DESIGN.md decision #15c), so
+# adding a league needs no Makefile edit, just a new registry entry. Defaults
+# to "who-dat" - this repo's original league - so every existing
+# zero-arg command (`make publish-site`, `make sync-payouts-config`, ...)
+# keeps working exactly as before. Override per-command: `make publish-site
+# LEAGUE=all-for-the-shiva`.
+LEAGUE ?= who-dat
 AWS_REGION ?= us-west-2
 
-# $BUCKET is looked up from the stack's Outputs (SiteBucketNameOutput)
-# rather than hardcoded here, so a bucket rename/redeploy doesn't require
-# editing this file - see .claude/TODO-frontend.md's "how does $BUCKET get sourced"
-# item.
+# $(call league-field,<key>) reads one field out of leagues/registry.json for
+# the current $(LEAGUE) - a plain `python3 -c` JSON lookup, matching the
+# inline-Python style already used elsewhere in this file (e.g.
+# deploy-branch's espn_creds.json reads) rather than adding a jq dependency.
+league-field = $(shell python3 -c "import json; print(json.load(open('leagues/registry.json'))['$(LEAGUE)']['$(1)'])")
+
+STACK_NAME = $(call league-field,stack_name)
+FUNCTION_NAME = $(call league-field,function_name)
+
 site-bucket:
-	@aws cloudformation describe-stacks \
-		--stack-name $(STACK_NAME) \
-		--region $(AWS_REGION) \
-		--query "Stacks[0].Outputs[?OutputKey=='SiteBucketNameOutput'].OutputValue" \
-		--output text
+	@python3 -c "import json; print(json.load(open('leagues/registry.json'))['$(LEAGUE)']['site_bucket'])"
 
 sync-site:
 	aws s3 sync site/ "s3://$$($(MAKE) -s site-bucket)/" --region $(AWS_REGION)
 
 sync-config:
-	aws s3 cp league_config.json "s3://$$($(MAKE) -s site-bucket)/league_config.json" --region $(AWS_REGION)
+	aws s3 cp "leagues/$(LEAGUE)/league_config.json" "s3://$$($(MAKE) -s site-bucket)/league_config.json" --region $(AWS_REGION)
 
-# Publishes everything the frontend deploy step owns (site/ + the one
-# repo-root config file) in one go. Does NOT run `sam build && sam deploy` -
-# that's infra/Lambda code, chain it yourself first if the stack itself also
-# changed: `sam build && sam deploy && make publish-site`.
-publish-site: sync-site sync-config
-
-# Not front-end-facing (decision #4 - the browser never fetches this,
-# only the Lambda reads it, from the config/ prefix per FF_CONFIG_PREFIX),
-# so it's not part of publish-site above - a separate, explicit step,
-# same reasoning that already applies to sync-config/league_config.json.
-# This target didn't exist before decision #14 (year-specific payout
-# rules) needed a way to actually get an edited weekly_payouts_config.json
-# in front of the deployed Lambda - previously always done as an ad hoc
-# `aws s3 cp`, never scripted.
+# Not front-end-facing (decision #4 - the browser never fetches these, only
+# the Lambda reads them, from the config/ prefix per FF_CONFIG_PREFIX) - kept
+# separate from sync-config/publish-site for the same reason decision #14
+# split out sync-payouts-config originally. owner_map.json holds real names
+# (decision #15a), so it's read from ignore/leagues/<slug>/, not the
+# committed leagues/<slug>/ - same split as league_reports/config.py's local
+# path resolution.
 sync-payouts-config:
-	aws s3 cp config/weekly_payouts_config.json "s3://$$($(MAKE) -s site-bucket)/config/weekly_payouts_config.json" --region $(AWS_REGION)
+	aws s3 cp "leagues/$(LEAGUE)/weekly_payouts_config.json" "s3://$$($(MAKE) -s site-bucket)/config/weekly_payouts_config.json" --region $(AWS_REGION)
 
-.PHONY: site-bucket sync-site sync-config publish-site sync-payouts-config
+sync-owner-map:
+	aws s3 cp "ignore/leagues/$(LEAGUE)/owner_map.json" "s3://$$($(MAKE) -s site-bucket)/config/owner_map.json" --region $(AWS_REGION)
+
+# Publishes everything the frontend deploy step owns, for $(LEAGUE), in one
+# go: site/ + all three config files. Does NOT run `sam build && sam deploy`
+# - that's infra/Lambda code; for a brand-new league's first deploy, stand up
+# the stack first (`make deploy-league LEAGUE=<slug>`), then this.
+publish-site: sync-site sync-config sync-payouts-config sync-owner-map
+
+.PHONY: site-bucket sync-site sync-config sync-payouts-config sync-owner-map publish-site
 
 # --------------------------------------------------------------------------
 # Parallel/branch infra - originally built for DESIGN-incremental-espn-pipeline.md's
@@ -178,16 +186,16 @@ invoke-branch:
 	@cat /tmp/branch-invoke-response.json && echo
 
 # Makes the branch stack's site actually render, end to end: pushes
-# site/index.html/style.css + league_config.json + the two config/ files
-# (owner_map.json, weekly_payouts_config.json - needed by the Lambda's own
-# config reads, not otherwise covered by publish-site/sync-config, which
-# only handle the front-end-facing files) straight to BRANCH_BUCKET_NAME
-# (not through publish-site/sync-config, which default to STACK_NAME=
-# espn-ff-s3-site - reusing them here without an override would silently
-# sync to *production's* bucket instead), then invokes every step needed
-# for a fully-rendering page in one call: the three reports with a _v2
-# replacement (head_to_head/advanced_history/weekly_summary, cut over to
-# production - DESIGN-incremental-espn-pipeline.md decision #13) write
+# site/index.html/style.css + all three of $(LEAGUE)'s config files (DESIGN.md
+# decision #15a's leagues/$(LEAGUE)/ + ignore/leagues/$(LEAGUE)/ - defaults to
+# who-dat, override with `make render-branch LEAGUE=all-for-the-shiva` to
+# test against the other league's config) straight to BRANCH_BUCKET_NAME
+# (not through publish-site/sync-config, which resolve their bucket from
+# leagues/registry.json - reusing them here would silently sync to a real
+# production bucket instead of the throwaway branch one), then invokes every
+# step needed for a fully-rendering page in one call: the three reports with
+# a _v2 replacement (head_to_head/advanced_history/weekly_summary, cut over
+# to production - DESIGN-incremental-espn-pipeline.md decision #13) write
 # straight to this stack's bucket root, same as every other step, plus the
 # reports that have no _v2 counterpart at all (history, records,
 # owner_habits). Re-run any time after re-invoking individual steps if you
@@ -198,9 +206,9 @@ invoke-branch:
 # shot," not a different upload path.
 render-branch:
 	aws s3 sync site/ "s3://$(BRANCH_BUCKET_NAME)/" --region $(AWS_REGION)
-	aws s3 cp league_config.json "s3://$(BRANCH_BUCKET_NAME)/league_config.json" --region $(AWS_REGION)
-	aws s3 cp ignore/owner_map.json "s3://$(BRANCH_BUCKET_NAME)/config/owner_map.json" --region $(AWS_REGION)
-	aws s3 cp config/weekly_payouts_config.json "s3://$(BRANCH_BUCKET_NAME)/config/weekly_payouts_config.json" --region $(AWS_REGION)
+	aws s3 cp "leagues/$(LEAGUE)/league_config.json" "s3://$(BRANCH_BUCKET_NAME)/league_config.json" --region $(AWS_REGION)
+	aws s3 cp "ignore/leagues/$(LEAGUE)/owner_map.json" "s3://$(BRANCH_BUCKET_NAME)/config/owner_map.json" --region $(AWS_REGION)
+	aws s3 cp "leagues/$(LEAGUE)/weekly_payouts_config.json" "s3://$(BRANCH_BUCKET_NAME)/config/weekly_payouts_config.json" --region $(AWS_REGION)
 	$(MAKE) invoke-branch STEPS='["history","records","owner_habits","head_to_head_v2","advanced_history_v2","weekly_summary_v2"]'
 	@echo "Branch site: http://$(BRANCH_BUCKET_NAME).s3-website-$(AWS_REGION).amazonaws.com"
 
@@ -215,3 +223,55 @@ destroy-branch:
 	sam delete --stack-name $(BRANCH_STACK_NAME) --region $(AWS_REGION) --no-prompts
 
 .PHONY: deploy-branch invoke-branch render-branch destroy-branch
+
+# --------------------------------------------------------------------------
+# Per-league production deploys (DESIGN.md decision #15c) - stands up or
+# updates $(LEAGUE)'s real, permanent stack using leagues/registry.json's
+# names for it, sharing the exact same template.yaml/Lambda code as every
+# other league (no per-site fork). Unlike deploy-branch above, these are
+# real production stacks: ScheduleState=ENABLED (the schedule actually runs
+# unattended), not DISABLED. EspnSwid/EspnEspnS2 come from the same shared
+# ignore/espn_creds.json every league uses (decision #12c/#15a - one ESPN
+# login is a member of every league this repo drives). Adding a brand-new
+# league is: create leagues/<slug>/ + ignore/leagues/<slug>/owner_map.json,
+# add a leagues/registry.json entry, `make deploy-league LEAGUE=<slug>`
+# (stands up the stack), `make publish-site LEAGUE=<slug>` (pushes site/ +
+# all config, populates real data) - no code change, no template.yaml change.
+deploy-league:
+	@test -f ignore/espn_creds.json || (echo "ignore/espn_creds.json not found - see README.md's Local development step 2" && exit 1)
+	@echo "Deploying league stack: $(STACK_NAME) (bucket $$($(MAKE) -s site-bucket), function $(FUNCTION_NAME), schedule ENABLED)"
+	@SWID=$$(python3 -c "import json; print(json.load(open('ignore/espn_creds.json'))['swid'])"); \
+	ESPN_S2=$$(python3 -c "import json; print(json.load(open('ignore/espn_creds.json'))['espn_s2'])"); \
+	SITE_BUCKET=$$($(MAKE) -s site-bucket); \
+	sam build && \
+	sam deploy \
+		--stack-name $(STACK_NAME) \
+		--region $(AWS_REGION) \
+		--resolve-s3 \
+		--capabilities CAPABILITY_NAMED_IAM \
+		--no-confirm-changeset \
+		--parameter-overrides \
+			SiteBucketName=$$SITE_BUCKET \
+			FunctionName=$(FUNCTION_NAME) \
+			ScheduleState=ENABLED \
+			PandasLayerArn=$(PANDAS_LAYER_ARN) \
+			EspnSwid=$$SWID \
+			EspnEspnS2=$$ESPN_S2
+	@echo "League stack deployed: $(STACK_NAME)"
+	@echo "  make publish-site LEAGUE=$(LEAGUE)   # push site/ + all config, populate real data"
+
+# STEPS works exactly like invoke-branch's (DESIGN.md decision #10b's STEPS
+# registry) - explicit and required, no "run everything" default by
+# accident.
+invoke-league:
+	@test -n "$(STEPS)" || (echo "Usage: make invoke-league LEAGUE=<slug> STEPS='[\"head_to_head_v2\"]'" && exit 1)
+	aws lambda invoke \
+		--function-name $(FUNCTION_NAME) \
+		--region $(AWS_REGION) \
+		--cli-read-timeout 900 \
+		--payload '{"steps": $(STEPS)}' \
+		--cli-binary-format raw-in-base64-out \
+		/tmp/league-invoke-response.json
+	@cat /tmp/league-invoke-response.json && echo
+
+.PHONY: deploy-league invoke-league

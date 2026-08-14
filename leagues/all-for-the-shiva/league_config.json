@@ -1,0 +1,22 @@
+{
+  "league_id": 854288221,
+  "sport": "football",
+  "years": {
+    "start": 2026,
+    "end": 2026,
+    "box_score_start": 2026,
+    "current": 2026
+  },
+  "site": {
+    "title": "All For The Shiva"
+  },
+  "lineup": {
+    "QB": 1,
+    "RB": 2,
+    "WR": 2,
+    "TE": 1,
+    "FLEX": 1,
+    "K": 1,
+    "D/ST": 1
+  }
+}

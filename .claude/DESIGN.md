@@ -529,7 +529,15 @@ Two gaps, one fix each, both building on decision #10's machinery instead of int
   archive-write is a small addition to the same `_upload_csv`/`_upload_json` calls that step already
   makes.
 
-### 12. Multi-league support: per-invocation league selection + S3 output partitioning
+### 12. Multi-league support: per-invocation league selection + S3 output partitioning — superseded by #15
+
+**Superseded, not built.** This decision assumed the eventual multi-league requirement would be "one
+Lambda invocation processes several leagues into one shared bucket." When the actual requirement showed
+up (2026-08-14), it was different in a way that matters: **sites need to be visibly separate** (their
+own bucket/URL), not merged under one site with a league picker or a shared prefix. See decision #15
+for what's actually built. Left in place below rather than deleted, since 12c's shared-secret reasoning
+and the general "config vs. code" framing are still accurate background — just not the S3-layout/
+event-schema mechanics, which decision #15 replaces outright.
 
 **Problem.** Everything built and planned so far (decisions #4, #7, #10, #11) assumes exactly one
 league: one `league_config.json`, one `owner_map.json`, one `weekly_payouts_config.json`, one flat set
@@ -710,6 +718,213 @@ override for one year doesn't leak into another; the old config shape with no `w
 key at all still resolves) and end-to-end — a deliberately different rule type for one week of a real
 closed season produced a genuinely different payout winner than the default rule would have, confirmed
 through both the no-cache and cached (Lambda-facing) builders against the scratch bucket.
+
+### 15. Multi-league support: one Lambda, separate sites, per-league CloudFormation stacks
+
+**Problem** (as stated, 2026-08-14): the Lambda should be reusable, but sites should be separate — no
+per-site code fork. What's customizable per league: league name, weekly payouts, weekly award names,
+owner map. End state: deploy multiple configurations from a single repo, each with its own
+schedule/invocations, all served by one shared `site/` HTML/JS via templating.
+
+**Design: stack-per-league, not a shared bucket.** `template.yaml` already deploys as a fully
+self-contained, fully parameterized stack — `SiteBucketName`/`FunctionName` drive the bucket name, the
+Lambda name, the IAM role names, the Secrets Manager secret name, and every EventBridge Scheduler
+resource name, with zero hardcoded identifiers left over (proven in practice: the Makefile's
+`deploy-branch` target already stands up a complete second copy of the whole stack this way, for
+feature-branch testing). A second league is just a second deploy of that same template with different
+parameter values — **no `template.yaml` change and no `lambda_function.py` change are needed for the
+core multi-tenancy story.** Each deployed Lambda stays exactly as single-tenant as it is today (one
+`FF_SITE_BUCKET` env var, one bucket, flat keys at its root, same as decision #7) — there's no runtime
+`league_ids` loop, no `leagues/<league_id>/` S3 prefix, no per-invocation bucket selection. This is why
+decision #12 is superseded rather than extended: #12 solved "many leagues sharing one bucket," which
+isn't the requirement once sites must be visibly separate — a distinct bucket per league makes that
+whole layer of machinery unnecessary.
+
+(Note: the ESPN numeric `league_id` inside `league_config.json`, and the `leagues/<league_id>/cache/...`
+/ `leagues/<league_id>/archive/...` S3 prefixes decisions #10a/#11/#13 already write within *a* site's
+own bucket, are untouched and unrelated to this decision — those stay exactly as they are, just now
+understood to be scoped to one single-tenant bucket rather than a hypothetical shared one.)
+
+#### 15a. Repo layout: `leagues/<slug>/` as the source of truth per site
+
+```
+leagues/
+  registry.json                        # committed - which slugs exist + their deployed resource names
+  who-dat/
+    league_config.json                 # league id, year range, site title/subtitle, awards, lineup
+    weekly_payouts_config.json         # decision #14's schema, per league
+ignore/
+  espn_creds.json                      # shared across leagues (12c's reasoning still holds - see below)
+  leagues/
+    who-dat/
+      owner_map.json                   # real names - gitignored, same as today's ignore/owner_map.json
+```
+
+`league_config.json` and `weekly_payouts_config.json` hold no personal data (title/awards/payout rules,
+not names) so they're committed, same as today. `owner_map.json` does hold real names, so it stays
+under `ignore/`, just nested one level deeper per league. `espn_creds.json` stays a single shared file —
+per decision #12c's still-valid reasoning, one ESPN login is a member of every league this repo drives,
+so there's no need for per-league credentials; each stack still gets its own `Secrets Manager` secret
+object (that part of `template.yaml` is unchanged), just populated from the same underlying value at
+deploy time for every league.
+
+`leagues/registry.json` is the map from slug to already-deployed resource names:
+
+```json
+{
+  "who-dat": {
+    "stack_name": "espn-ff-s3-site",
+    "function_name": "espn-ff-data-generator",
+    "site_bucket": "espn-ff-site-217412666418"
+  }
+}
+```
+
+Explicit, not derived, because `who-dat` is the pre-existing production stack and its names predate any
+slug-based convention (renaming it would mean recreating the bucket — a real, disruptive, unforced
+change to a live site, not worth it just to fit a naming pattern). A *new* league gets to pick whatever
+name follows the derived convention (`espn-ff-s3-site-<slug>` / `espn-ff-site-<account>-<slug>` /
+`espn-ff-data-generator-<slug>`, mirroring `deploy-branch`'s `BRANCH_*` naming) and adds its own entry
+here — the registry is what the Makefile actually reads, so there's one explicit, inspectable source of
+truth instead of two naming schemes for the Makefile to reconcile.
+
+#### 15b. Local dev: `FF_LEAGUE` selects which `leagues/<slug>/` directory is active
+
+`league_reports/config.py`'s local-file path constants (`LEAGUE_CONFIG_PATH`, `PAYOUTS_CONFIG_PATH`,
+`OWNER_MAP_PATH`) become derived from `FF_LEAGUE` (env var, default `"who-dat"` — today's only league,
+so an unset `FF_LEAGUE` reproduces today's exact behavior for every existing script). `CREDS_PATH` stays
+global (`ignore/espn_creds.json`), matching 15a. This is the same env-var-driven-default pattern
+`FF_CONFIG_BACKEND` already uses for local-vs-S3 selection, not a new mechanism. Every local script
+(`scripts/run_all.py`, `compare_v2.py`, `replay_2025.py`, ...) keeps working unchanged, since they all
+go through `config.py`'s functions rather than hardcoding paths themselves; testing a second league
+locally is `FF_LEAGUE=<slug> python scripts/run_all.py`.
+
+The S3 backend (`FF_CONFIG_BACKEND=s3`, what the deployed Lambda actually uses) needs **no equivalent
+change** — see the design note above, each deployed Lambda already only ever talks to its own
+`FF_SITE_BUCKET`.
+
+#### 15c. Makefile: `LEAGUE=<slug>` parameterizes deploy/sync, reading the registry
+
+`deploy-branch`/`render-branch`'s pattern (stand up the stack, push `site/` + all three config files,
+invoke every step once) is generalized into `LEAGUE`-parameterized targets that resolve `STACK_NAME`/
+`SiteBucketName`/`FunctionName` from `leagues/registry.json` (a small `python3 -c` JSON lookup, matching
+the existing inline-Python style already used for reading `ignore/espn_creds.json`) instead of deriving
+them from the git branch, and read config from `leagues/$(LEAGUE)/` + `ignore/leagues/$(LEAGUE)/
+owner_map.json` instead of the old repo-root locations. Unlike `deploy-branch`, these are real
+production stacks — `ScheduleState=ENABLED`, not `DISABLED`. `LEAGUE` defaults to `who-dat`, so every
+existing muscle-memory command (`make publish-site`, `make sync-payouts-config`, ...) keeps working
+exactly as before with zero args. Adding a second league is: create its `leagues/<slug>/` +
+`ignore/leagues/<slug>/owner_map.json`, add its registry entry, `make deploy-league LEAGUE=<slug>`
+(stands up the stack), `make publish-site-league LEAGUE=<slug>` (pushes `site/` + all config, populates
+real data) — no code change, no `template.yaml` change.
+
+#### 15d. Frontend: zero changes — `site/` was already templated for this
+
+`site/index.html` already fetches every data file same-origin/relative (`dataUrl()`, decision #7) and
+already fetches `league_config.json` at runtime to set `document.title`/the page header from
+`site.title`/`site.subtitle` (built for decision #4, when `league_config.json` was made public). Since
+each league now gets its own bucket holding only its own flat files at the root — not a shared bucket
+with a `leagues/<id>/` prefix, which *would* have needed fetch-path/routing changes — the exact same
+`site/index.html`/`style.css`, synced unchanged to every league's bucket, already renders that league's
+name/awards/payouts correctly with no build step, no query-string routing, and no league-picker page.
+This resolves TODO-frontend.md's previously-flagged "what does the front end do once outputs are
+partitioned" question: the answer is "they aren't partitioned within a site — sites are separate," so
+the question doesn't apply.
+
+#### 15e. Weekly payout winner labels: the one remaining hardcoded per-league text
+
+`weekly_summary_v2.py`'s `compute_weekly_payout_week` hardcoded each payout type's display text
+("Highest Scoring Team", "Top Individual Player Score", ...) — the last piece of "weekly award names"
+that wasn't already config-driven (the season-level `top_score`/`bottom_score`/`least_efficient` award
+names were already in `league_config.json`'s `awards` block since before this decision). Fixed the same
+additive way as decision #14: each rule in `weekly_payouts_config.json` may carry an optional `"label"`
+key; `compute_weekly_payout_week` uses `rule.get("label", <the existing hardcoded default for that
+payout_type>)`, so an unedited config produces byte-identical output to before.
+
+#### Rollout order
+
+1. `weekly_summary_v2.py` + `weekly_payouts_config.json` schema: the `"label"` override (15e) and the
+   optional/empty `weekly_payouts` fallback (15g) — both independent of everything else, validated the
+   same way as decision #14.
+2. Repo restructure (15a): move today's `league_config.json`/`config/weekly_payouts_config.json`/
+   `ignore/owner_map.json` into `leagues/who-dat/`/`ignore/leagues/who-dat/`, add `leagues/registry.json`
+   pointing at the already-live stack/bucket/function names.
+3. `config.py` (15b): `FF_LEAGUE`-driven local path resolution, defaulting to `who-dat`.
+4. Makefile (15c): generalize into `LEAGUE`-parameterized targets backed by the registry.
+5. Validate by redeploying **the existing league** through the new mechanism end to end (`make
+   publish-site-league LEAGUE=who-dat` etc.) and confirming the live site is unchanged — this exercises
+   every new code path without needing a second real league's data, consistent with this project's
+   practice of never fabricating config for a league that doesn't exist yet.
+6. Second league added same day (15f below) — league_id 854288221, slug `all-for-the-shiva`.
+
+#### 15f. Second league: `all-for-the-shiva` (league_id 854288221) — migrated from NFL.com, 2026 is its first ESPN season
+
+**Problem investigated:** this league migrated from NFL.com to ESPN as part of NFL.com's fantasy
+platform consolidation, so "not all endpoints return data for past seasons" (advanced stats, records,
+owner habits all read year-by-year via `League()`) — needed to probe what's actually retrievable before
+picking a `years` range for its `league_config.json`.
+
+**Findings** (probed directly against ESPN's API, then confirmed against the live ESPN UI):
+- **2018–2025: the league doesn't exist on ESPN at all** (`ESPNInvalidLeague`/404 for every one of
+  these years under league_id 854288221) — it was played on NFL.com those years, never on ESPN, so
+  there's nothing to fetch; not a bug, not fixable.
+- **2014–2017: exists, but only as a legacy standings-only import** — real league (12 teams, real
+  settings, draft flagged complete) reachable via ESPN's older `/leagueHistory/` endpoint, but the
+  response has no `schedule` key at all (no per-week matchups, no rosters, no box scores — apparently
+  not carried over from NFL.com in the migration). `espn_api`'s `League.__init__` reads
+  `data['schedule']` unconditionally, so it can't even construct a `League` object for these years — a
+  library-level crash, not something any of our report code gets a chance to run against.
+- **2013: doesn't exist** either (league started 2014 on NFL.com).
+- **2026: works.** Confirmed live via the ESPN UI (`fantasy.espn.com/football/team?leagueId=854288221&
+  teamId=9&seasonId=2026`) — this is the league's first season natively on ESPN, currently pre-draft as
+  of 2026-08-14 ("Your SNAKE Draft is not yet scheduled").
+
+**No code change needed.** Every report module (`history.py`, `advanced_history_v2.py`, `records_v2.py`,
+`head_to_head_v2.py`, `owner_habits.py`) already wraps each year's `League()`/`get_league()` call in a
+per-year `try/except Exception: continue` — built for transient-ESPN-hiccup resilience (predates this
+league entirely), but it happens to degrade exactly right here too: an unreachable year is silently
+skipped, logged, and the rest proceed. The only decision that actually matters is what `years` range
+this league's `league_config.json` configures — and the correct answer is **not** "reach back to 2013
+and let the try/except eat the failures every run": a year that can never succeed still costs a real
+(wasted) ESPN API call on every single invocation forever, since decision #10a's per-year cache only
+ever writes on a *successful* compute — a permanently-failing year is retried, never cached, indefinitely.
+So: `years.start = years.end = years.current = box_score_start = 2026` — this league's site starts with
+zero history and fills in from its actual first ESPN-native season onward, matching what was asked
+("history and weekly summary, once there is in-season data, should work").
+
+**Other per-league findings, pulled from the live 2026 `League()` object while probing:**
+- League name (`site.title`): "All For The Shiva" (`league.settings.name`) — the team-name-looking
+  string in the ESPN UI ("Really Big Halftime Leads") is Morrie's own team name, not the league name.
+- `lineup`: `{"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "D/ST": 1}` — one FLEX, not two like
+  `who-dat` (`position_slot_counts` read directly off `league.settings`, not guessed).
+- Real owner names for 6 of 12 teams (the other 6 have no manager assigned yet — league is still
+  pre-draft/filling out); those 6 are left absent from `owner_map.json` rather than guessed, same
+  never-fabricate-config practice as everywhere else in this project. One real naming collision found
+  and resolved: both Matt Silberman and Morrie Swerlick initial to "MS" — used `MS` for Morrie (team 9)
+  and `MSi` for Matt (team 4) to disambiguate; flagged to Morrie as a judgment call, not silently forced.
+- **No weekly payouts configured** — nothing suggested this league runs them, so `weekly_payouts_config.
+  json` ships with an empty `weekly_payouts: {}` (see 15e's `.get()` fallback and the "payouts are
+  optional per league" fix below) rather than reusing `who-dat`'s rules or inventing new ones.
+- **No `awards` block either** — same reasoning, don't invent joke trophy names for a friend group whose
+  actual inside jokes weren't given. This surfaced a real, separate latent bug: `weekly_summary_v2.py`'s
+  `DEFAULT_AWARDS` (the fallback used when a league's `league_config.json` has no `awards` block) was
+  hardcoded to *who-dat's own* inside-joke trophy names ("The Regression Incoming Plaque", ...) — dead
+  code in practice while who-dat was the only league (it always supplies its own `awards`), but a real
+  bug now that a second league can hit the fallback. Fixed to a generic default ("Top Score"/"Bottom
+  Score"/"Least Efficient"); who-dat's own config is unaffected since it never reaches this fallback.
+  `weekly_summary.py` (v1, not running in production) keeps the old hardcoded default — not touched,
+  same precedent as every other v1/v2 divergence in this project.
+
+#### 15g. Weekly payouts are optional per league, not every league's thing
+
+Raised alongside the second league: "some leagues have weekly payouts but some do not." Before this,
+`resolve_payout_rules()` did `payout_config["weekly_payouts"]` — a hard `KeyError` if that key were ever
+absent, because every league so far had it. Fixed to `payout_config.get("weekly_payouts", {})`: a league
+with no payout rules at all (empty dict, or the key omitted) simply never matches a week, so
+`compute_weekly_payout_week` returns `None` for every week and `weekly_payout_winners.json` comes back
+an empty list — already exactly what the front end expects when nothing qualifies for a given week today
+(no template/rendering change needed, per 15d's "already templated" finding). `weekly_efficiency_awards`
+and `survivor_results` are untouched by this — those aren't "payouts" and every league gets them.
 
 ## Repo layout (this repo)
 

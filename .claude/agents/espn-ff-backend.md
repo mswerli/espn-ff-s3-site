@@ -37,8 +37,15 @@ reformat or restructure sections you don't own.
   `survivor_results.json`, `weekly_payout_winners.json`.
 - **`league_config.json` has two consumers now**: the Lambda reads it as config input, and the
   browser fetches it directly (client-side, for the site title/subtitle). Its canonical location is
-  the repo root (`league_reports/config.py`'s `LEAGUE_CONFIG_PATH`), not `site/`. Don't move it into `site/`
-  to "fix" this — the deploy step (frontend's job) copies it to the bucket root explicitly instead.
+  `leagues/<slug>/league_config.json` (DESIGN.md decision #15a; `league_reports/config.py`'s
+  `LEAGUE_CONFIG_PATH`), not `site/`. Don't move it into `site/` to "fix" this — the deploy step
+  (frontend's job) copies it to that league's bucket root explicitly instead.
+- **This repo now drives multiple leagues, each its own CloudFormation stack** (DESIGN.md decision
+  #15) — one shared `template.yaml`/Lambda deployed once per league with different parameters, not one
+  shared bucket. `leagues/registry.json` maps a league slug to its already-deployed stack/bucket/
+  function names; `leagues/<slug>/` holds that league's `league_config.json`/`weekly_payouts_config.json`
+  (committed — no personal data); `ignore/leagues/<slug>/owner_map.json` holds real names (gitignored).
+  `FF_LEAGUE` (default `who-dat`) selects which league's directory local scripts read.
 - **ESPN credentials never go in S3 or git**, even in a "private" prefix. Secrets Manager only.
 - **Never invoke against the live site bucket while testing** — use a scratch S3 prefix/bucket until
   a run has been reviewed. The Lambda's IAM role should only ever be able to `PutObject` the 8
