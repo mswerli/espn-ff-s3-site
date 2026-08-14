@@ -363,7 +363,7 @@ Resources:
         # it exactly as of the decision #13 cutover (head_to_head_v2/
         # advanced_history_v2/weekly_summary_v2 in place of their legacy
         # counterparts; history/records stay legacy; owner_habits excluded).
-        Input: '{"steps": ["history", "head_to_head_v2", "advanced_history_v2", "records", "weekly_summary_v2"]}'
+        Input: '{"steps": ["history", "head_to_head_v2", "advanced_history_v2", "records_v2", "weekly_summary_v2"]}'
 
 Outputs:
   SiteBucketWebsiteURL:
