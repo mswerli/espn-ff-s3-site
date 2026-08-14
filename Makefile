@@ -76,7 +76,18 @@ sync-config:
 # changed: `sam build && sam deploy && make publish-site`.
 publish-site: sync-site sync-config
 
-.PHONY: site-bucket sync-site sync-config publish-site
+# Not front-end-facing (decision #4 - the browser never fetches this,
+# only the Lambda reads it, from the config/ prefix per FF_CONFIG_PREFIX),
+# so it's not part of publish-site above - a separate, explicit step,
+# same reasoning that already applies to sync-config/league_config.json.
+# This target didn't exist before decision #14 (year-specific payout
+# rules) needed a way to actually get an edited weekly_payouts_config.json
+# in front of the deployed Lambda - previously always done as an ad hoc
+# `aws s3 cp`, never scripted.
+sync-payouts-config:
+	aws s3 cp config/weekly_payouts_config.json "s3://$$($(MAKE) -s site-bucket)/config/weekly_payouts_config.json" --region $(AWS_REGION)
+
+.PHONY: site-bucket sync-site sync-config publish-site sync-payouts-config
 
 # --------------------------------------------------------------------------
 # Parallel/branch infra - originally built for DESIGN-incremental-espn-pipeline.md's

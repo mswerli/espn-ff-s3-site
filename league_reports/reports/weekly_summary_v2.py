@@ -35,6 +35,13 @@ Part D of decision #13 (the front-end-facing weekly/<year>/week_<n>.json +
 manifest.json partitioned publish format) is intentionally NOT in this
 file - tracked separately once parts A-C are validated, not bundled in
 here (see DESIGN-incremental-espn-pipeline.md's rollout order, step 10).
+
+resolve_payout_rules() (DESIGN.md decision #14): payout rules can now vary
+by year - config/weekly_payouts_config.json's "weekly_payouts" is the
+default/fallback, "weekly_payouts_by_year" holds whole-season overrides
+keyed by year. v1's build_weekly_payouts never gained this - it still
+reads payout_config["weekly_payouts"] directly, unaffected by the new key
+existing alongside it.
 """
 from collections import defaultdict
 
@@ -228,13 +235,27 @@ def build_survivor_results_v2(efficiency_df, last_elimination_week=12):
     }
 
 
+def resolve_payout_rules(payout_config, year):
+    """DESIGN.md decision #14: weekly_payouts_by_year lets a specific
+    season override the payout rules entirely - payout_config["weekly_payouts"]
+    is the fallback used for any year with no entry there (and the only
+    thing v1's build_weekly_payouts ever reads, unchanged - this is
+    additive, not a schema migration). Each year's entry, if present, is a
+    complete week->rule map on its own (same shape as "weekly_payouts"
+    itself) - no per-week merging with the default, to keep "what rules
+    applied in year X" answerable by reading one block instead of two."""
+    by_year = payout_config.get("weekly_payouts_by_year", {})
+    return by_year.get(str(year), payout_config["weekly_payouts"])
+
+
 def compute_weekly_payout_week(league, league_id, year, week, payout_config, bucket, is_closed):
     """This week's payout winner, or None if there's no payout rule for
     this week or nobody qualified. Sourced via box_score_cache."""
-    if str(week) not in payout_config["weekly_payouts"]:
+    rules = resolve_payout_rules(payout_config, year)
+    if str(week) not in rules:
         return None  # skip weeks with no payout rule
 
-    rule = payout_config["weekly_payouts"][str(week)]
+    rule = rules[str(week)]
     payout_type = rule["type"]
     box_scores = get_box_scores(league, league_id, year, week, bucket, is_closed=is_closed)
     team_lookup = {team.team_id: team for team in league.teams}

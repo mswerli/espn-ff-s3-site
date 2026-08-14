@@ -14,5 +14,6 @@
     "12": { "type": "top_slot", "slots": { "FLEX": 1 } },
     "13": { "type": "highest_total_points" },
     "14": { "type": "top_slot", "slots": { "K": 1 } }
-  }
+  },
+  "weekly_payouts_by_year": {}
 }

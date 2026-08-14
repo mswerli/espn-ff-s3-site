@@ -654,6 +654,40 @@ shadow-mode rollout plan (new code runs alongside the production pipeline, publi
 `shadow/` prefix, diffed against production before any cutover) live in their own document:
 [DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md).
 
+### 14. Weekly payout rules can vary by year
+
+`config/weekly_payouts_config.json` was a single flat `{"weekly_payouts": {"<week>": {rule}}}` map,
+used for every season identically — no way to express "week 6's rule was different in 2023 than it is
+now" without hand-editing the file before and after computing each affected season, a manual step
+nobody would remember to do correctly across backfills (decision #11 made backfilling an actual
+on-demand operation, not just a hypothetical, which is what made this gap worth closing now rather
+than staying theoretical).
+
+Added, additively — `weekly_payouts_by_year`, a sibling key holding whole-season overrides keyed by
+year: `{"weekly_payouts": {...default...}, "weekly_payouts_by_year": {"2023": {...complete override
+for 2023...}}}`. `weekly_summary_v2.py`'s `resolve_payout_rules(payout_config, year)` looks up
+`weekly_payouts_by_year[str(year)]` first, falling back to `weekly_payouts` (the default) when that
+year has no entry — so an unedited config (or a year nobody's added an override for) behaves exactly
+as before. Deliberately **not** a per-week merge against the default: a year's override, once present,
+is a complete week→rule map on its own, so "what rules applied in year X" is answerable by reading one
+block, not reconciling two.
+
+`v1`'s `weekly_summary.py`/`build_weekly_payouts` was **not** touched — it still reads
+`payout_config["weekly_payouts"]` directly, which continues to resolve exactly as it always has since
+the new key is additive, not a schema migration. Only `weekly_summary_v2.py` (the step actually running
+in production since decision #13's cutover) gained year-awareness.
+
+New Makefile target, `sync-payouts-config` — this file was never previously scripted; pushing an edited
+copy to the deployed Lambda's config was always an ad hoc `aws s3 cp`. Not front-end-facing (the browser
+never fetches it, only the Lambda reads it from the `config/` prefix), so it's a separate target, not
+folded into `publish-site`.
+
+Validated: `resolve_payout_rules()` unit-checked directly (no override falls back to default; an
+override for one year doesn't leak into another; the old config shape with no `weekly_payouts_by_year`
+key at all still resolves) and end-to-end — a deliberately different rule type for one week of a real
+closed season produced a genuinely different payout winner than the default rule would have, confirmed
+through both the no-cache and cached (Lambda-facing) builders against the scratch bucket.
+
 ## Repo layout (this repo)
 
 ```
