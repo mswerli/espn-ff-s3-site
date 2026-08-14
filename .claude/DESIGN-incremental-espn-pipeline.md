@@ -1,10 +1,11 @@
 # Incremental ESPN data pipeline — shared fetch, raw box-score cache, weekly partitioning
 
 Status: parts A–C implemented, validated, and **cut over to production** — `DEFAULT_STEPS` and the
-weekly schedule run the `_v2` steps as of the `cutover-v2-weekly-run` branch (see "Cutover criteria"
-below for why the originally-planned observation window was skipped). Part D (frontend partitioning)
-not started. Built across `docs/incremental-espn-pipeline` (merged to `main`) and
-`cutover-v2-weekly-run`.
+weekly schedule run `head_to_head_v2`/`advanced_history_v2`/`records_v2`/`weekly_summary_v2` (see
+"Cutover criteria" below for why the originally-planned observation window was skipped, both for the
+original three and for `records_v2`'s later addition). Part D (frontend partitioning) not started.
+Built across `docs/incremental-espn-pipeline` (merged to `main`), `cutover-v2-weekly-run`,
+`cleanup-drop-shadow-writes`, and `records-v2-cache`.
 
 This is decision #13 for [DESIGN.md](DESIGN.md) — kept as its own document rather than another
 DESIGN.md section because it's implementation-level enough (specific S3 keys, specific new modules,
@@ -305,8 +306,23 @@ above exists to catch — no amount of local scratch-bucket testing under a broa
 - The optional aggressive tier in part C (bypassing `box_scores()`'s internal
   positional-ratings/pro-schedule calls, skipping `_fetch_draft()`/`_fetch_players()` for non-habits
   steps) — not part of this rollout; revisit only if steps 1–9 don't reduce runtime/call-volume enough.
-- `records.py` (`all_time_records.csv`) — structurally similar to `advanced_history.py` (reduces across
-  weeks) and would benefit from the same `box_score_cache.py`, but wasn't in scope for this pass;
-  natural follow-up once this pipeline is proven.
+- ~~`records.py` (`all_time_records.csv`) — structurally similar to `advanced_history.py`...~~ — done,
+  as a follow-up pass once the rest of this pipeline had already cut over and proven stable in
+  production. `records_v2.py` follows the same per-year-partial-plus-merge split as `head_to_head_v2.py`
+  (needed here since `team_game_high`/`team_game_low`/`player_game_high`/`player_game_high_by_pos` are
+  genuine cross-year reductions, same shape as head-to-head's problem), shares `box_score_cache.py` with
+  `advanced_history_v2.py`/`weekly_summary_v2.py`, and was cut straight over to `DEFAULT_STEPS` on
+  landing rather than going through its own separate shadow-validation window — same reasoning as the
+  original cutover (hobby project), reinforced this time by the fact that the shadow mechanism itself
+  had already been retired by then, so shadow-mode wasn't even available as an option without rebuilding
+  it. Validated the same way the other three were: `scripts/compare_v2.py` across multiple seasons
+  (byte-identical, no floating-point-noise surprise this time - `records.py` already rounds every value
+  to 2 decimals before output, unlike `head_to_head`), plus a cold/warm/cross-check cache validation
+  pass against the scratch bucket confirming the merge produces identical output to a full recompute.
+  Two accumulators dropped while porting, not just the one this document originally flagged:
+  `player_season_totals` (already known dead) and `team_season_totals` (found dead during the port -
+  both write-only, confirmed by grepping the whole repo, neither read anywhere including by v1 itself).
 - Exact N for the cutover-criteria cycle count isn't picked yet — needs a number agreed on before step
-  7, not left as "whenever it feels safe."
+  7, not left as "whenever it feels safe." (Moot in practice - every cutover done under this decision so
+  far skipped the N-cycle window entirely, by explicit choice; left here as a historical note on what
+  the original plan called for, not a live open item.)

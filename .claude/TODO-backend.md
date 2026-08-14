@@ -5,10 +5,10 @@ Execution checklist for the Lambda that regenerates the site's CSV/JSON data. Ra
 
 Done and deployed: Phase 1 (Prep), the Lambda handler + Lambda-side `template.yaml` infra, initial
 testing, and decision #13 (incremental current-year refresh — shared `League()` fetch, per-year +
-raw box-score caching, `head_to_head`/`advanced_history`/`weekly_summary` cut over to production).
-See [DESIGN.md](DESIGN.md) and [DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md)
-for what shipped, `git log` for when, [[espn-ff-live-infra]] memory for what's live today. This file
-only tracks what's still open.
+raw box-score caching, `head_to_head`/`advanced_history`/`records`/`weekly_summary` cut over to
+production). See [DESIGN.md](DESIGN.md) and
+[DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md) for what shipped, `git log`
+for when, [[espn-ff-live-infra]] memory for what's live today. This file only tracks what's still open.
 
 ## Cadence-tier schedule split (DESIGN.md decision #10)
 
@@ -18,14 +18,6 @@ only tracks what's still open.
       `ScheduleState` parameter per schedule for offseason toggling
 - [ ] Confirm live-tier cron hours with Morrie against actual game-day timing (still just a starting
       guess)
-
-## `records.py` per-year cache (DESIGN.md decision #10)
-
-- [ ] Refactor `records.py` from "reduce across all years in one pass" to "per-year partial + merge",
-      using `league_reports/cache.py` + `box_score_cache.py` (already built) — same pattern as
-      `advanced_history_v2.py`
-- [ ] Confirm `records.py`'s apparently-dead `player_season_totals` accumulator is truly unread, then
-      drop it while in there
 
 ## Weekly-summary backfill + retention (DESIGN.md decision #11)
 

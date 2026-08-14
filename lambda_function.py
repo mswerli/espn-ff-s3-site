@@ -12,20 +12,23 @@ list of STEPS keys, e.g. `{"steps": ["head_to_head_v2"]}`; an unknown name
 is a hard ValueError, not a silent skip. No "steps" key at all falls back
 to DEFAULT_STEPS.
 
-Cutover (see .claude/DESIGN-incremental-espn-pipeline.md decision #13):
-DEFAULT_STEPS runs the `_v2` builds (head_to_head_v2, advanced_history_v2,
-weekly_summary_v2) in place of their legacy counterparts (head_to_head,
-advanced_history, weekly_summary) - cache-aware (league_reports.cache +
-league_reports.box_score_cache), publishing straight to the real
-bucket-root keys, same filenames the site already fetches. `history` and
-`records` have no _v2 replacement and stay legacy; `owner_habits` stays
-excluded from DEFAULT_STEPS same as always (draft picks only change on
-draft day, never implicit). The legacy `head_to_head`/`advanced_history`/
-`weekly_summary` step functions and their v1 report modules are untouched
-and still callable by name (`{"steps": ["head_to_head"]}`) if ever needed -
-this was a step-registry cutover, not a code deletion. Not scoped to
-multi-league (DESIGN.md decision #12) yet - league_id comes from the
-single configured league_config.json, not an event["league_ids"] list.
+Cutover (see .claude/DESIGN-incremental-espn-pipeline.md decision #13 and
+.claude/TODO-backend.md's "records.py per-year cache" item): DEFAULT_STEPS
+runs the `_v2` builds (head_to_head_v2, advanced_history_v2,
+weekly_summary_v2, records_v2) in place of their legacy counterparts
+(head_to_head, advanced_history, weekly_summary, records) - cache-aware
+(league_reports.cache + league_reports.box_score_cache), publishing
+straight to the real bucket-root keys, same filenames the site already
+fetches. `history` has no _v2 replacement (no per-year/per-week cost worth
+caching - see advanced_history_v2.py's docstring) and stays legacy;
+`owner_habits` stays excluded from DEFAULT_STEPS same as always (draft
+picks only change on draft day, never implicit). The legacy
+`head_to_head`/`advanced_history`/`weekly_summary`/`records` step
+functions and their v1 report modules are untouched and still callable by
+name (`{"steps": ["head_to_head"]}`) if ever needed - this was a
+step-registry cutover, not a code deletion. Not scoped to multi-league
+(DESIGN.md decision #12) yet - league_id comes from the single configured
+league_config.json, not an event["league_ids"] list.
 
 Pre-cutover, the `_v2` steps ran in shadow mode: an unconditional write to
 a private `leagues/<league_id>/shadow/` prefix, plus an opt-in,
@@ -57,6 +60,7 @@ from league_reports.reports.head_to_head_v2 import build_head_to_head_v2_cached
 from league_reports.reports.history import build_history
 from league_reports.reports.owner_habits import build_owner_habits
 from league_reports.reports.records import build_records
+from league_reports.reports.records_v2 import build_records_v2_cached
 from league_reports.reports.weekly_summary import (
     DEFAULT_AWARDS,
     build_survivor_results,
@@ -242,6 +246,19 @@ def _step_advanced_history_v2(league_config, owner_map, creds, bucket):
     _upload_csv(df, "advanced_team_metrics.csv", bucket, skip_if_empty=True)
 
 
+def _step_records_v2(league_config, creds, bucket):
+    league_id = league_config["league_id"]
+    df = build_records_v2_cached(
+        league_id=league_id,
+        years=year_range(league_config, span="box_score"),
+        current_year=league_config["years"]["current"],
+        swid=creds["swid"],
+        espn_s2=creds["espn_s2"],
+        bucket=bucket,
+    )
+    _upload_csv(df, "all_time_records.csv", bucket)
+
+
 def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket):
     league_id = league_config["league_id"]
     year = league_config["years"]["current"]
@@ -305,6 +322,8 @@ STEPS = {
         _step_head_to_head_v2(league_config, creds, bucket),
     "advanced_history_v2": lambda league_config, owner_map, payouts_config, creds, bucket:
         _step_advanced_history_v2(league_config, owner_map, creds, bucket),
+    "records_v2": lambda league_config, owner_map, payouts_config, creds, bucket:
+        _step_records_v2(league_config, creds, bucket),
     "weekly_summary_v2": lambda league_config, owner_map, payouts_config, creds, bucket:
         _step_weekly_summary_v2(league_config, payouts_config, creds, bucket),
 }
@@ -318,14 +337,15 @@ STEP_LABELS = {
     "weekly_summary": "Weekly summaries / payouts / survivor pool",
     "head_to_head_v2": "Head-to-head records (v2)",
     "advanced_history_v2": "Advanced team metrics (v2)",
+    "records_v2": "All-time records (v2)",
     "weekly_summary_v2": "Weekly summaries / payouts / survivor pool (v2)",
 }
 
-# Cutover (decision #13): head_to_head/advanced_history/weekly_summary run
-# via their _v2 replacements now, not the legacy modules. history/records
-# have no _v2 counterpart and stay legacy. owner_habits stays excluded
-# (draft picks only change on draft day - never implicit, decision #10b).
-DEFAULT_STEPS = ["history", "head_to_head_v2", "advanced_history_v2", "records", "weekly_summary_v2"]
+# Cutover (decision #13): head_to_head/advanced_history/records/weekly_summary
+# run via their _v2 replacements now, not the legacy modules. history has no
+# _v2 counterpart and stays legacy. owner_habits stays excluded (draft picks
+# only change on draft day - never implicit, decision #10b).
+DEFAULT_STEPS = ["history", "head_to_head_v2", "advanced_history_v2", "records_v2", "weekly_summary_v2"]
 
 
 def handler(event, context):

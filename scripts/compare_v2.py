@@ -27,6 +27,8 @@ from league_reports.reports.advanced_history import build_advanced_history
 from league_reports.reports.advanced_history_v2 import build_advanced_history_v2
 from league_reports.reports.head_to_head import build_head_to_head
 from league_reports.reports.head_to_head_v2 import build_head_to_head_v2
+from league_reports.reports.records import build_records
+from league_reports.reports.records_v2 import build_records_v2
 from league_reports.reports.weekly_summary import (
     build_survivor_results, build_weekly_efficiency, build_weekly_payouts,
 )
@@ -47,7 +49,7 @@ DEFAULT_LINEUP_CONFIG = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 2, "K": 1, 
 # lambda_function.py's year_range(config, span="box_score") for this step.
 # weekly_summary only ever processes one season (not a year range), so its
 # default is just league_config.json's configured current year.
-DEFAULT_SPAN = {"head_to_head": "full", "advanced_history": "box_score", "weekly_summary": "current_only"}
+DEFAULT_SPAN = {"head_to_head": "full", "advanced_history": "box_score", "records": "box_score", "weekly_summary": "current_only"}
 
 
 def _parse_years(spec, config, span="full"):
@@ -123,6 +125,20 @@ def compare_head_to_head(config, creds, owner_map, payout_config, years):
         swid=creds["swid"], espn_s2=creds["espn_s2"],
     )
     return _diff_frames(["Owner ID", "Opponent ID"], v1, v2)
+
+
+def compare_records(config, creds, owner_map, payout_config, years):
+    print(f"Building v1 (legacy) records for {list(years)}...")
+    v1 = build_records(
+        league_id=config["league_id"], years=years,
+        swid=creds["swid"], espn_s2=creds["espn_s2"],
+    )
+    print(f"Building v2 records for {list(years)}...")
+    v2 = build_records_v2(
+        league_id=config["league_id"], years=years,
+        swid=creds["swid"], espn_s2=creds["espn_s2"],
+    )
+    return _diff_frames(["Category", "Record"], v1, v2)
 
 
 def compare_advanced_history(config, creds, owner_map, payout_config, years):
@@ -202,6 +218,7 @@ def compare_weekly_summary(config, creds, owner_map, payout_config, years):
 REPORTS = {
     "head_to_head": compare_head_to_head,
     "advanced_history": compare_advanced_history,
+    "records": compare_records,
     "weekly_summary": compare_weekly_summary,
 }
 
