@@ -430,10 +430,32 @@ real subfolder with no sibling file at that prefix a wildcard could accidentally
    asserting on log output / call count, not just eyeballing timing); confirm `owner_habits` never
    appears in a scheduled run's `succeeded`/`failed` lists, only a manual-invoke one.
 
-### 11. Weekly-summary reports need backfill + retention across season rollover, not just caching
+### 11. Weekly-summary reports need backfill + retention across season rollover, not just caching — done
 
 _(Same note as 10a/10b: key patterns below are already written in their `leagues/<league_id>/`-partitioned
 form — see decision #12.)_
+
+**Shipped**, on the `weekly-summary-backfill-retention` branch, against `weekly_summary_v2` (decision
+#13's cutover replacement for `weekly_summary.py`, not the original `_step_weekly_summary` this section
+was written against — the pattern below carried over unchanged, just onto the current code). `handler()`
+takes an optional `event["year"]`, threaded through the `STEPS` registry to every step (ignored by all
+but `weekly_summary_v2`, same "uniform signature" pattern `owner_map`/`payouts_config` already use).
+Archival cache and season-stamped `archive/` copies write unconditionally, every run, current or
+backfilled; the three current-facing files only get overwritten when the requested year matches
+`league_config["years"]["current"]` — a backfill run can never clobber live current-season data.
+One correctness fix fell out of building this, not a separate change: every builder's `current_year`
+parameter now gets the *real* configured current year, not the year being processed — passing the
+processed year there (what the code did pre-decision-#11, since nothing had ever called these builders
+with `year != current` before) left a backfilled season's very last week perpetually uncached, the same
+off-by-one gap `advanced_history_v2.py`'s docstring describes for the closedness check generally.
+Validated end-to-end against the scratch bucket: a backfill run for a closed season while a later season
+is configured as current writes archive/cache only, confirmed by the current-facing files' timestamps
+staying untouched; a subsequent current-year run updates the current-facing files and that year's own
+archive/cache, confirmed by the backfilled season's archive files' timestamps staying untouched across
+it (the actual rollover-safety property this decision exists for); the backfilled season's cached output
+matched an independent fully-live recompute exactly; every week of the backfilled season — including the
+last one — ended up cached, confirming the `current_year` fix; re-running the same backfill afterward
+cost only the two `League()` constructions, zero `box_scores` calls.
 
 Decision #10 treats `weekly_summary.py` as "nothing to cache — it's supposed to hit ESPN fresh every
 time." True for avoiding *re-fetches*, but it exposed a second gap: `weekly_efficiency_awards.csv`,

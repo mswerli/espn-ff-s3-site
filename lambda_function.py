@@ -52,6 +52,7 @@ from pathlib import Path
 
 import boto3
 
+from league_reports.cache import put_cached_year
 from league_reports.config import load_all_config, year_range
 from league_reports.reports.advanced_history import build_advanced_history
 from league_reports.reports.advanced_history_v2 import build_advanced_history_v2_cached
@@ -106,25 +107,34 @@ def _write_json(data, filename):
     return out
 
 
-def _upload(local_path, bucket):
-    """Upload a /tmp file to s3://<bucket>/<same filename>, at the bucket
-    root (.claude/DESIGN.md decision #7 - the site has no data/ prefix), with an
-    explicit Content-Type (boto3 doesn't infer one from the extension)."""
-    key = local_path.name
+def _upload(local_path, bucket, key=None):
+    """Upload a /tmp file to s3://<bucket>/<key>. key defaults to the bare
+    filename at the bucket root (.claude/DESIGN.md decision #7 - the site
+    has no data/ prefix) - every step but the weekly-summary archive writes
+    below relies on that default unchanged. Content-Type is always
+    explicit - boto3 doesn't infer one from the extension."""
+    key = key or local_path.name
     content_type = CONTENT_TYPES.get(local_path.suffix, "application/octet-stream")
     print(f"  Uploading {local_path} -> s3://{bucket}/{key} ({content_type})")
     _s3().upload_file(str(local_path), bucket, key, ExtraArgs={"ContentType": content_type})
 
 
-def _upload_csv(df, filename, bucket, skip_if_empty=False):
+def _upload_csv(df, filename, bucket, skip_if_empty=False, key=None):
     if skip_if_empty and (df is None or df.empty):
         print(f"  {filename}: no data collected, skipping upload")
         return
-    _upload(_write_csv(df, filename), bucket)
+    _upload(_write_csv(df, filename), bucket, key=key)
 
 
-def _upload_json(data, filename, bucket):
-    _upload(_write_json(data, filename), bucket)
+def _upload_json(data, filename, bucket, key=None):
+    _upload(_write_json(data, filename), bucket, key=key)
+
+
+def _archive_key(league_id, filename):
+    """DESIGN.md decision #11: season-stamped archive copies live at
+    leagues/<league_id>/archive/<filename>, public-read like the rest of
+    the bucket - not a shadow/private prefix, this is meant to be fetched."""
+    return f"leagues/{league_id}/archive/{filename}"
 
 
 def _step_history(league_config, owner_map, creds, bucket):
@@ -259,22 +269,41 @@ def _step_records_v2(league_config, creds, bucket):
     _upload_csv(df, "all_time_records.csv", bucket)
 
 
-def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket):
+def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket, year=None):
+    """DESIGN.md decision #11. year=None (the default, what the schedule
+    always passes): processes league_config["years"]["current"] and updates
+    the current-facing files, same as before this decision. year=<a past
+    season>: backfills that season instead - the current-facing files are
+    left alone (they only ever reflect the true current season, per
+    decision #11's contract), but the archive/cache writes below still
+    happen, so any past season's weekly data can be (re)built on demand:
+    {"steps": ["weekly_summary_v2"], "year": 2024}.
+
+    real_current_year (not target_year) is what gets passed as every
+    builder's current_year - that's the value the box_score_cache
+    closedness check (`year < current_year`) needs to correctly treat a
+    backfilled season as fully closed, including its very last week (a
+    plain `week < league.current_week` check alone would leave that one
+    week perpetually uncached - see advanced_history_v2.py's docstring for
+    why). This was already a latent gap before this decision existed
+    (nothing called this step with year != current before), so fixing it
+    falls out naturally here rather than needing its own separate change."""
     league_id = league_config["league_id"]
-    year = league_config["years"]["current"]
+    real_current_year = league_config["years"]["current"]
+    target_year = year if year is not None else real_current_year
+    is_current = target_year == real_current_year
+
     lineup_config = league_config.get("lineup", DEFAULT_LINEUP_CONFIG)
     awards = league_config.get("awards", DEFAULT_AWARDS_V2)
     last_elimination_week = league_config.get("survivor", {}).get("last_elimination_week", 12)
 
     # Same order as _step_weekly_summary: payouts computed first, but
     # written last (efficiency -> survivor -> payouts), since survivor
-    # results are derived from the efficiency DataFrame. current_year=year
-    # here (not a backfilled past season) - decision #11's year-override
-    # backfill isn't wired into this step, same scope as the legacy step.
+    # results are derived from the efficiency DataFrame.
     winners = build_weekly_payouts_v2_cached(
         league_id=league_id,
-        year=year,
-        current_year=year,
+        year=target_year,
+        current_year=real_current_year,
         swid=creds["swid"],
         espn_s2=creds["espn_s2"],
         payout_config=payouts_config,
@@ -283,49 +312,76 @@ def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket):
 
     efficiency_df = build_weekly_efficiency_v2_cached(
         league_id=league_id,
-        year=year,
-        current_year=year,
+        year=target_year,
+        current_year=real_current_year,
         swid=creds["swid"],
         espn_s2=creds["espn_s2"],
         lineup_config=lineup_config,
         bucket=bucket,
         awards=awards,
     )
-    _upload_csv(efficiency_df, "weekly_efficiency_awards.csv", bucket)
 
     survivor_result = build_survivor_results_v2(
         efficiency_df, last_elimination_week=last_elimination_week
     )
-    _upload_json(survivor_result, "survivor_results.json", bucket)
 
-    _upload_json(winners, "weekly_payout_winners.json", bucket)
+    # Archival cache (decision #11) - always writes, current or backfilled,
+    # unlike decision #10a's closed-years-only re-fetch cache. Not gated on
+    # is_closed since this is retention, not re-fetch avoidance: the point
+    # is a durable record of what this year's weekly data looked like, not
+    # skipping ESPN calls (box_score_cache above already did that part).
+    put_cached_year(bucket, league_id, "weekly_efficiency", target_year, efficiency_df.to_dict(orient="records"))
+    put_cached_year(bucket, league_id, "survivor_results", target_year, survivor_result)
+    put_cached_year(bucket, league_id, "weekly_payouts", target_year, winners)
+
+    # Season-stamped archive copies (decision #11) - public, published,
+    # always written - so target_year's final weekly data survives a later
+    # season's rollover instead of being silently overwritten.
+    _upload_csv(efficiency_df, "weekly_efficiency_awards.csv", bucket,
+                key=_archive_key(league_id, f"weekly_efficiency_awards_{target_year}.csv"))
+    _upload_json(survivor_result, "survivor_results.json", bucket,
+                 key=_archive_key(league_id, f"survivor_results_{target_year}.json"))
+    _upload_json(winners, "weekly_payout_winners.json", bucket,
+                 key=_archive_key(league_id, f"weekly_payout_winners_{target_year}.json"))
+
+    # Current-facing files - only when this run reflects the real current
+    # season. A backfill run must never overwrite live current-season data
+    # with a past season's - that's the one thing decision #11 explicitly
+    # protects ("the three current-facing files keep their exact contract").
+    if is_current:
+        _upload_csv(efficiency_df, "weekly_efficiency_awards.csv", bucket)
+        _upload_json(survivor_result, "survivor_results.json", bucket)
+        _upload_json(winners, "weekly_payout_winners.json", bucket)
 
 
 # DESIGN.md decision #10b's step registry: one entry per _step_* function,
-# uniform (league_config, owner_map, payouts_config, creds, bucket)
+# uniform (league_config, owner_map, payouts_config, creds, bucket, year)
 # signature regardless of which args a given step actually needs, so
-# handler() doesn't need to know each step's individual shape.
+# handler() doesn't need to know each step's individual shape. `year`
+# (decision #11) is ignored by every step but weekly_summary_v2 - same
+# "uniform signature, steps ignore what they don't need" pattern
+# owner_map/payouts_config already follow.
 STEPS = {
-    "history": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "history": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_history(league_config, owner_map, creds, bucket),
-    "head_to_head": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "head_to_head": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_head_to_head(league_config, creds, bucket),
-    "advanced_history": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "advanced_history": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_advanced_history(league_config, owner_map, creds, bucket),
-    "owner_habits": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "owner_habits": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_owner_habits(league_config, creds, bucket),
-    "records": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "records": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_records(league_config, creds, bucket),
-    "weekly_summary": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "weekly_summary": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_weekly_summary(league_config, payouts_config, creds, bucket),
-    "head_to_head_v2": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "head_to_head_v2": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_head_to_head_v2(league_config, creds, bucket),
-    "advanced_history_v2": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "advanced_history_v2": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_advanced_history_v2(league_config, owner_map, creds, bucket),
-    "records_v2": lambda league_config, owner_map, payouts_config, creds, bucket:
+    "records_v2": lambda league_config, owner_map, payouts_config, creds, bucket, year:
         _step_records_v2(league_config, creds, bucket),
-    "weekly_summary_v2": lambda league_config, owner_map, payouts_config, creds, bucket:
-        _step_weekly_summary_v2(league_config, payouts_config, creds, bucket),
+    "weekly_summary_v2": lambda league_config, owner_map, payouts_config, creds, bucket, year:
+        _step_weekly_summary_v2(league_config, payouts_config, creds, bucket, year=year),
 }
 
 STEP_LABELS = {
@@ -351,12 +407,15 @@ DEFAULT_STEPS = ["history", "head_to_head_v2", "advanced_history_v2", "records_v
 def handler(event, context):
     """EventBridge Scheduler entrypoint (also invokable manually via the
     console/CLI - see .claude/DESIGN.md decision #9). `context` is unused;
-    `event` supplies an optional "steps" list (DESIGN.md decision #10b) -
-    see the module docstring. All other configuration still comes from
+    `event` supplies an optional "steps" list (DESIGN.md decision #10b) and
+    an optional "year" (DESIGN.md decision #11, weekly_summary_v2's
+    backfill override - every other step ignores it) - see the module
+    docstring. All other configuration still comes from
     league_reports.config.load_all_config(), not the invocation payload
     (see the config-source decision in .claude/DESIGN.md decision #4)."""
     league_config, owner_map, payouts_config, creds = load_all_config()
     bucket = os.environ["FF_SITE_BUCKET"]
+    year = event.get("year")
 
     requested = event.get("steps")
     if requested is None:
@@ -374,7 +433,7 @@ def handler(event, context):
         label = STEP_LABELS.get(name, name)
         print(f"\n=== {label} ===")
         try:
-            STEPS[name](league_config, owner_map, payouts_config, creds, bucket)
+            STEPS[name](league_config, owner_map, payouts_config, creds, bucket, year)
             succeeded.append(label)
         except Exception as e:
             print(f"FAILED: {label}: {e}")
