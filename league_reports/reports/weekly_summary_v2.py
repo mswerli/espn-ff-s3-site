@@ -115,8 +115,13 @@ def assign_weekly_awards(week_data, awards=DEFAULT_AWARDS):
             entry["Award"] = awards.get("least_efficient", DEFAULT_AWARDS["least_efficient"])
 
 
-def _week_is_closed(year, week, current_year, league):
-    return (current_year is not None and year < current_year) or week < league.current_week
+def _week_is_closed(year, week, current_year, league, max_week=None):
+    """max_week (validation-only, see scripts/replay_2025.py): stands in
+    for league.current_week when given, so a real completed season can be
+    replayed as if "today" were partway through it. None (the default)
+    means "use the real season boundary" - today's actual behavior."""
+    effective_current_week = max_week if max_week is not None else league.current_week
+    return (current_year is not None and year < current_year) or week < effective_current_week
 
 
 def compute_weekly_efficiency_week(league, league_id, year, week, lineup_config, awards, bucket, is_closed):
@@ -166,15 +171,24 @@ def build_weekly_efficiency_v2(league_id, year, swid, espn_s2, lineup_config, aw
     return _weekly_efficiency_rows_to_df(all_data)
 
 
-def build_weekly_efficiency_v2_cached(league_id, year, current_year, swid, espn_s2, lineup_config, bucket, awards=DEFAULT_AWARDS):
+def build_weekly_efficiency_v2_cached(league_id, year, current_year, swid, espn_s2, lineup_config, bucket, awards=DEFAULT_AWARDS, max_week=None):
     """The production path: already-played weeks of this season are read
     from/written to league_reports.box_score_cache; the just-completed/
-    in-progress week is always live."""
+    in-progress week is always live.
+
+    max_week (validation-only, see scripts/replay_2025.py): caps the week
+    loop and stands in for league.current_week in the closedness check, so
+    a real completed season can be replayed as if "today" were partway
+    through it. None (the default): today's actual behavior, unchanged."""
     league = get_league(league_id, year, swid, espn_s2)
     all_data = []
 
-    for week in range(1, min(league.currentMatchupPeriod, league.settings.reg_season_count) + 1):
-        is_closed = _week_is_closed(year, week, current_year, league)
+    last_week = min(league.currentMatchupPeriod, league.settings.reg_season_count)
+    if max_week is not None:
+        last_week = min(last_week, max_week)
+
+    for week in range(1, last_week + 1):
+        is_closed = _week_is_closed(year, week, current_year, league, max_week=max_week)
         try:
             week_data = compute_weekly_efficiency_week(
                 league, league_id, year, week, lineup_config, awards, bucket=bucket, is_closed=is_closed,
@@ -334,18 +348,25 @@ def build_weekly_payouts_v2(league_id, year, swid, espn_s2, payout_config):
     return all_winners
 
 
-def build_weekly_payouts_v2_cached(league_id, year, current_year, swid, espn_s2, payout_config, bucket):
+def build_weekly_payouts_v2_cached(league_id, year, current_year, swid, espn_s2, payout_config, bucket, max_week=None):
     """The production path. Note: this loop only ever reaches
-    range(1, league.current_week), i.e. it never touches the in-progress
+    range(1, effective_current_week), i.e. it never touches the in-progress
     week at all (payouts are only awarded for fully-completed weeks) - so
     every week this function processes is already closed by construction,
     same `_week_is_closed` expression as the other two builders anyway for
-    consistency rather than hardcoding True."""
+    consistency rather than hardcoding True.
+
+    max_week (validation-only, see scripts/replay_2025.py): stands in for
+    league.current_week, so a real completed season can be replayed as if
+    "today" were partway through it - weeks 1..max_week-1 processed, same
+    as weeks 1..current_week-1 today. None (the default): unchanged."""
     league = get_league(league_id, year, swid, espn_s2)
     all_winners = []
 
-    for week in range(1, league.current_week):
-        is_closed = _week_is_closed(year, week, current_year, league)
+    effective_current_week = max_week if max_week is not None else league.current_week
+
+    for week in range(1, effective_current_week):
+        is_closed = _week_is_closed(year, week, current_year, league, max_week=max_week)
         winner = compute_weekly_payout_week(league, league_id, year, week, payout_config, bucket=bucket, is_closed=is_closed)
         if winner:
             all_winners.append(winner)

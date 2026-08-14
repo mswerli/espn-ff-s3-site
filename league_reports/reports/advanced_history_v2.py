@@ -37,7 +37,7 @@ from league_reports.cache import get_or_compute_year
 from league_reports.espn_client import get_league
 
 
-def compute_advanced_history_year(league_id, year, owner_map, swid, espn_s2, current_year=None, bucket=None):
+def compute_advanced_history_year(league_id, year, owner_map, swid, espn_s2, current_year=None, bucket=None, max_week=None):
     """One season's fully-computed advanced-metrics rows, as a JSON-safe
     list of dicts matching build_advanced_history()'s per-row shape. No
     cross-year accumulation needed - safe to cache whole, per year.
@@ -47,6 +47,14 @@ def compute_advanced_history_year(league_id, year, owner_map, swid, espn_s2, cur
     scripts/compare_v2.py. bucket set: weeks before current_week (or every
     week, if this whole year is before current_year) are read from/written
     to league_reports.box_score_cache instead.
+
+    max_week (validation-only, see scripts/replay_2025.py): caps which
+    weeks get processed at all, and stands in for league.current_week in
+    the closedness check, so a real completed season can be replayed as if
+    "today" were partway through it - weeks before max_week are cache-or-
+    compute, week max_week itself is always live, weeks after it are
+    excluded entirely. None (the default) means "use the real season
+    boundary," i.e. today's actual behavior, unchanged.
 
     Lets get_league()'s own exception propagate (same as v1's per-year
     try/except, but that catch belongs to the caller - see build_advanced_history_v2()/
@@ -87,11 +95,14 @@ def compute_advanced_history_year(league_id, year, owner_map, swid, espn_s2, cur
     })
 
     week_numbers = sorted(int(w) for w in league.settings.matchup_periods.keys() if int(w) < league.currentMatchupPeriod)
+    if max_week is not None:
+        week_numbers = [w for w in week_numbers if w <= max_week]
+    effective_current_week = max_week if max_week is not None else league.current_week
 
     for week in week_numbers:
         try:
             week_is_closed = bucket is not None and (
-                (current_year is not None and year < current_year) or week < league.current_week
+                (current_year is not None and year < current_year) or week < effective_current_week
             )
             box_scores = get_box_scores(league, league_id, year, week, bucket, is_closed=week_is_closed)
         except Exception:
@@ -239,13 +250,19 @@ def build_advanced_history_v2(league_id, years, owner_map, swid, espn_s2):
     return _rows_to_df(data)
 
 
-def build_advanced_history_v2_cached(league_id, years, current_year, owner_map, swid, espn_s2, bucket):
+def build_advanced_history_v2_cached(league_id, years, current_year, owner_map, swid, espn_s2, bucket, max_week=None):
     """The production path. Per year: closed years (year < current_year)
     are read from s3://<bucket>/leagues/<league_id>/cache/advanced_history/<year>.json
     if present, computed+cached once on a miss; the current year is always
     computed fresh (and never cached at the year level), but its
     already-played weeks still go through box_score_cache so a mid-season
-    re-run doesn't re-fetch them either."""
+    re-run doesn't re-fetch them either.
+
+    max_week (validation-only, see compute_advanced_history_year and
+    scripts/replay_2025.py): only ever applied to `current_year` itself -
+    a truly closed year is either already cached whole or, on a first-ever
+    miss, needs its real full season computed and cached, never a
+    replay-truncated one."""
     data = []
     for year in years:
         is_closed = year < current_year
@@ -259,6 +276,7 @@ def build_advanced_history_v2_cached(league_id, years, current_year, owner_map, 
                 is_closed=is_closed,
                 compute_fn=lambda y=year: compute_advanced_history_year(
                     league_id, y, owner_map, swid, espn_s2, current_year=current_year, bucket=bucket,
+                    max_week=max_week if y == current_year else None,
                 ),
             )
         except Exception as e:

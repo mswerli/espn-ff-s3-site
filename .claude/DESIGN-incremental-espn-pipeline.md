@@ -255,9 +255,21 @@ above exists to catch — no amount of local scratch-bucket testing under a broa
       read by `weekly_summary_v2` with zero further ESPN calls), not just cross-run for one report
 - [x] Live render against a real deployed parallel stack (`deploy-branch`/`render-branch`): site
       actually serves `_v2`-computed data over public HTTP, `curl`-confirmed, not just upload-confirmed
-- [ ] `box_score_cache.py`: a week's cache entry is fully overwritten (not appended to) on a re-run
-      while it's still the current week — not yet exercised against a genuinely in-progress week (the
-      real league's current configured season is already fully complete as of this writing)
+- [x] `box_score_cache.py`: a week's cache entry is fully overwritten (not appended to) on a re-run
+      while it's still the current week — the real league's current configured season is already fully
+      complete, so this couldn't be exercised against genuinely live ESPN data; instead validated via
+      `scripts/replay_2025.py`, a week-by-week replay of that real completed season using a new
+      `max_week` parameter (added to `compute_advanced_history_year`/both `weekly_summary_v2` cached
+      builders, default `None` = today's unchanged behavior) that stands in for `league.current_week` -
+      box_scores(week) for a real past week always returns that week's true final result regardless of
+      what "today" the caller pretends it is, so this replays exactly what a live weekly run would have
+      seen without needing ESPN to cooperate. 14 simulated weekly runs against the scratch bucket:
+      each week's data, once superseded by a later "closed" run, was fetched exactly once more (to
+      populate its cache for the first time) and never again; the still-"current" week was refetched
+      every run and never cached, exactly as designed; cross-report sharing held during the replay too
+      (advanced_history_v2 paid the cost of catching up the newly-closed week each run,
+      weekly_efficiency_v2 got it free moments later in the same run); final replay-converged output
+      matched an independent, fully live, zero-cache computation over the same 14-week window
 - [ ] Invocation-local `League()` sharing (part A): still not implemented even for the `_v2`-only scope
       decided in the lambda_function.py wiring pass — each `_v2` step still constructs its own `League()`
       per year
