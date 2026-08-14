@@ -16,17 +16,25 @@ Cutover (see .claude/DESIGN-incremental-espn-pipeline.md decision #13):
 DEFAULT_STEPS runs the `_v2` builds (head_to_head_v2, advanced_history_v2,
 weekly_summary_v2) in place of their legacy counterparts (head_to_head,
 advanced_history, weekly_summary) - cache-aware (league_reports.cache +
-league_reports.box_score_cache), publishing to the real bucket-root keys
-via AllowV2RootPublish=true (template.yaml's default as of this cutover),
-same filenames the site already fetches. `history` and `records` have no
-_v2 replacement and stay legacy; `owner_habits` stays excluded from
-DEFAULT_STEPS same as always (draft picks only change on draft day, never
-implicit). The legacy `head_to_head`/`advanced_history`/`weekly_summary`
-step functions and their v1 report modules are untouched and still
-callable by name (`{"steps": ["head_to_head"]}`) if ever needed - this was
-a step-registry cutover, not a code deletion. Not scoped to multi-league
-(DESIGN.md decision #12) yet - league_id comes from the single configured
-league_config.json, not an event["league_ids"] list.
+league_reports.box_score_cache), publishing straight to the real
+bucket-root keys, same filenames the site already fetches. `history` and
+`records` have no _v2 replacement and stay legacy; `owner_habits` stays
+excluded from DEFAULT_STEPS same as always (draft picks only change on
+draft day, never implicit). The legacy `head_to_head`/`advanced_history`/
+`weekly_summary` step functions and their v1 report modules are untouched
+and still callable by name (`{"steps": ["head_to_head"]}`) if ever needed -
+this was a step-registry cutover, not a code deletion. Not scoped to
+multi-league (DESIGN.md decision #12) yet - league_id comes from the
+single configured league_config.json, not an event["league_ids"] list.
+
+Pre-cutover, the `_v2` steps ran in shadow mode: an unconditional write to
+a private `leagues/<league_id>/shadow/` prefix, plus an opt-in,
+flag-gated (AllowV2RootPublish) second write to the real keys, so they
+could run alongside the legacy steps and get diffed before anything public
+depended on them. Retired once cutover landed and proved out (see git
+history / DESIGN-incremental-espn-pipeline.md) - the `_v2` steps now
+write directly to the real keys, nothing else, same as every legacy step
+always has.
 
 Config input: league_reports.config.load_all_config(), which (per
 FF_CONFIG_BACKEND) reads league_config.json/owner_map.json/
@@ -94,29 +102,25 @@ def _write_json(data, filename):
     return out
 
 
-def _upload(local_path, bucket, key=None):
-    """Upload a /tmp file to s3://<bucket>/<key>. key defaults to the bare
-    filename at the bucket root (.claude/DESIGN.md decision #7 - the site
-    has no data/ prefix) - every legacy step relies on that default
-    unchanged. The _v2 steps pass an explicit leagues/<league_id>/shadow/
-    key instead (DESIGN-incremental-espn-pipeline.md decision #13) so they
-    never touch the real published keys. Content-Type is always explicit -
-    boto3 doesn't infer one from the extension."""
-    key = key or local_path.name
+def _upload(local_path, bucket):
+    """Upload a /tmp file to s3://<bucket>/<same filename>, at the bucket
+    root (.claude/DESIGN.md decision #7 - the site has no data/ prefix), with an
+    explicit Content-Type (boto3 doesn't infer one from the extension)."""
+    key = local_path.name
     content_type = CONTENT_TYPES.get(local_path.suffix, "application/octet-stream")
     print(f"  Uploading {local_path} -> s3://{bucket}/{key} ({content_type})")
     _s3().upload_file(str(local_path), bucket, key, ExtraArgs={"ContentType": content_type})
 
 
-def _upload_csv(df, filename, bucket, skip_if_empty=False, key=None):
+def _upload_csv(df, filename, bucket, skip_if_empty=False):
     if skip_if_empty and (df is None or df.empty):
         print(f"  {filename}: no data collected, skipping upload")
         return
-    _upload(_write_csv(df, filename), bucket, key=key)
+    _upload(_write_csv(df, filename), bucket)
 
 
-def _upload_json(data, filename, bucket, key=None):
-    _upload(_write_json(data, filename), bucket, key=key)
+def _upload_json(data, filename, bucket):
+    _upload(_write_json(data, filename), bucket)
 
 
 def _step_history(league_config, owner_map, creds, bucket):
@@ -209,20 +213,6 @@ def _step_weekly_summary(league_config, payouts_config, creds, bucket):
     _upload_json(winners, "weekly_payout_winners.json", bucket)
 
 
-def _shadow_key(league_id, filename):
-    return f"leagues/{league_id}/shadow/{filename}"
-
-
-def _v2_root_publish_enabled():
-    """FF_ALLOW_V2_ROOT_PUBLISH (template.yaml's AllowV2RootPublish
-    parameter, default "false") - see the parameter's Description for the
-    full rationale. False on every deploy except a branch stack's, so a
-    redeploy of production can never start serving still-being-validated
-    _v2 output as real site data just because this env var happened to be
-    left set."""
-    return os.environ.get("FF_ALLOW_V2_ROOT_PUBLISH", "false").lower() == "true"
-
-
 def _step_head_to_head_v2(league_config, creds, bucket):
     league_id = league_config["league_id"]
     df = build_head_to_head_v2_cached(
@@ -233,12 +223,7 @@ def _step_head_to_head_v2(league_config, creds, bucket):
         espn_s2=creds["espn_s2"],
         bucket=bucket,
     )
-    # Shadow upload is unconditional (decision #13) - the root-publish
-    # below is the opt-in, flag-gated *addition* on top of it, not a
-    # replacement for it.
-    _upload_csv(df, "head_to_head_lifetime.csv", bucket, key=_shadow_key(league_id, "head_to_head_lifetime.csv"))
-    if _v2_root_publish_enabled():
-        _upload_csv(df, "head_to_head_lifetime.csv", bucket)
+    _upload_csv(df, "head_to_head_lifetime.csv", bucket)
 
 
 def _step_advanced_history_v2(league_config, owner_map, creds, bucket):
@@ -254,10 +239,7 @@ def _step_advanced_history_v2(league_config, owner_map, creds, bucket):
     )
     # Matches _step_advanced_history: box_scores() isn't reliable for older
     # seasons, so an empty result is expected/skipped, not an error.
-    _upload_csv(df, "advanced_team_metrics.csv", bucket, skip_if_empty=True,
-                key=_shadow_key(league_id, "advanced_team_metrics.csv"))
-    if _v2_root_publish_enabled():
-        _upload_csv(df, "advanced_team_metrics.csv", bucket, skip_if_empty=True)
+    _upload_csv(df, "advanced_team_metrics.csv", bucket, skip_if_empty=True)
 
 
 def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket):
@@ -292,22 +274,14 @@ def _step_weekly_summary_v2(league_config, payouts_config, creds, bucket):
         bucket=bucket,
         awards=awards,
     )
-    _upload_csv(efficiency_df, "weekly_efficiency_awards.csv", bucket,
-                key=_shadow_key(league_id, "weekly_efficiency_awards.csv"))
+    _upload_csv(efficiency_df, "weekly_efficiency_awards.csv", bucket)
 
     survivor_result = build_survivor_results_v2(
         efficiency_df, last_elimination_week=last_elimination_week
     )
-    _upload_json(survivor_result, "survivor_results.json", bucket,
-                 key=_shadow_key(league_id, "survivor_results.json"))
+    _upload_json(survivor_result, "survivor_results.json", bucket)
 
-    _upload_json(winners, "weekly_payout_winners.json", bucket,
-                 key=_shadow_key(league_id, "weekly_payout_winners.json"))
-
-    if _v2_root_publish_enabled():
-        _upload_csv(efficiency_df, "weekly_efficiency_awards.csv", bucket)
-        _upload_json(survivor_result, "survivor_results.json", bucket)
-        _upload_json(winners, "weekly_payout_winners.json", bucket)
+    _upload_json(winners, "weekly_payout_winners.json", bucket)
 
 
 # DESIGN.md decision #10b's step registry: one entry per _step_* function,

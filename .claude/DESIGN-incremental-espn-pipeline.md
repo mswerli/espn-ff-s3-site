@@ -208,6 +208,19 @@ that cleanup is still a separate, later, optional change (the legacy `head_to_he
 `DEFAULT_STEPS`/the schedule's `Input` back at the legacy step names — the legacy code was never
 touched or removed, so this is a plain revert, not a migration to undo.
 
+**Follow-up cleanup, once cutover was confirmed stable in production:** with the cutover proven (a real
+test invocation succeeded end-to-end against production - all steps green, fresh data confirmed live on
+the public site), the dual shadow+root write and the `AllowV2RootPublish` flag no longer served any
+purpose - there was no longer a separate "legacy path still running" for the shadow copy to be diffed
+against, so it was just a second, unused write on every run. Removed entirely: each `_v2` step now
+writes directly to its one real bucket-root key, same as every legacy step always has;
+`AllowV2RootPublish` (parameter, env var, and the code that read it) is gone from `template.yaml`/
+`lambda_function.py`/`Makefile`'s `deploy-branch`. The tier-3 description above is left as-written since
+it's an accurate record of how that validation actually worked at the time - just no longer how the
+code behaves today. `Makefile`'s `deploy-branch`/`render-branch`/`invoke-branch`/`destroy-branch`
+targets remain as general-purpose parallel-stack tooling; a future branch stack's `_v2` (or successor)
+output now renders at its own bucket root unconditionally, same as production, with no flag to set.
+
 ## Rollout order
 
 1. `league_reports/box_score_cache.py` (part C's cache primitive) — no dependents yet, testable in

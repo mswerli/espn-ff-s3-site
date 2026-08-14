@@ -79,18 +79,19 @@ publish-site: sync-site sync-config
 .PHONY: site-bucket sync-site sync-config publish-site
 
 # --------------------------------------------------------------------------
-# Parallel/branch infra (.claude/DESIGN-incremental-espn-pipeline.md's live-shadow
-# validation, rollout step 7) - stands up a FULL SECOND COPY of template.yaml's
-# stack (own bucket, own Lambda, own IAM roles, own Secrets Manager secret,
-# own EventBridge schedule) under a stack/bucket/function name derived from
-# the current git branch, so a feature branch can exercise the real Lambda/
-# EventBridge/IAM path end-to-end - not just the scratch-bucket local-Python
-# testing this branch has used so far - without ever touching the production
-# stack (`espn-ff-s3-site`, the STACK_NAME default above). Every generated
-# name below is a real AWS resource identifier (S3 bucket name, Lambda
-# function name) so it's sanitized (lowercase, non-alnum -> '-', collapsed,
-# trimmed) and truncated - S3 bucket names cap at 63 chars total - from the
-# raw branch name rather than used as-is.
+# Parallel/branch infra - originally built for DESIGN-incremental-espn-pipeline.md's
+# live-shadow validation (rollout step 7), still here as general-purpose
+# capability now that that particular cutover is done. Stands up a FULL
+# SECOND COPY of template.yaml's stack (own bucket, own Lambda, own IAM
+# roles, own Secrets Manager secret, own EventBridge schedule) under a
+# stack/bucket/function name derived from the current git branch, so a
+# feature branch can exercise the real Lambda/EventBridge/IAM path end to
+# end - not just local-Python testing - without ever touching the
+# production stack (`espn-ff-s3-site`, the STACK_NAME default above). Every
+# generated name below is a real AWS resource identifier (S3 bucket name,
+# Lambda function name) so it's sanitized (lowercase, non-alnum -> '-',
+# collapsed, trimmed) and truncated - S3 bucket names cap at 63 chars total -
+# from the raw branch name rather than used as-is.
 AWS_ACCOUNT_ID := $(shell aws sts get-caller-identity --query Account --output text)
 BRANCH_SLUG := $(shell git rev-parse --abbrev-ref HEAD | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$$//' | cut -c1-20)
 BRANCH_STACK_NAME := espn-ff-s3-site-$(BRANCH_SLUG)
@@ -118,13 +119,9 @@ PANDAS_LAYER_ARN ?= arn:aws:lambda:us-west-2:336392948345:layer:AWSSDKPandas-Pyt
 # ScheduleState=DISABLED (template.yaml) so a branch stack never runs its own
 # unattended weekly ESPN pull on top of production's - the Lambda is still
 # fully invokable by name (see invoke-branch below), only the automatic
-# trigger is off. AllowV2RootPublish=true (template.yaml) is what makes
-# render-branch below actually render real _v2 output on this stack's site -
-# safe here specifically because this bucket root isn't production's real
-# published data, unlike the default "false" everywhere else. EspnSwid/
-# EspnEspnS2 come from the same local ignore/espn_creds.json every other
-# local script already reads - no new credential handling introduced for
-# this.
+# trigger is off. EspnSwid/EspnEspnS2 come from the same local
+# ignore/espn_creds.json every other local script already reads - no new
+# credential handling introduced for this.
 deploy-branch:
 	@test -f ignore/espn_creds.json || (echo "ignore/espn_creds.json not found - see README.md's Local development step 2" && exit 1)
 	@echo "Deploying branch stack: $(BRANCH_STACK_NAME) (bucket $(BRANCH_BUCKET_NAME), function $(BRANCH_FUNCTION_NAME), schedule DISABLED)"
@@ -141,7 +138,6 @@ deploy-branch:
 			SiteBucketName=$(BRANCH_BUCKET_NAME) \
 			FunctionName=$(BRANCH_FUNCTION_NAME) \
 			ScheduleState=DISABLED \
-			AllowV2RootPublish=true \
 			PandasLayerArn=$(PANDAS_LAYER_ARN) \
 			EspnSwid=$$SWID \
 			EspnEspnS2=$$ESPN_S2
@@ -153,8 +149,8 @@ deploy-branch:
 # STEPS is the literal JSON list that becomes the Lambda event's "steps" key
 # (lambda_function.py's STEPS registry, DESIGN.md decision #10b) - e.g.
 # STEPS='["head_to_head_v2","advanced_history_v2","weekly_summary_v2"]' to
-# run every _v2 shadow step in one invocation, or a single legacy step name
-# to sanity-check the branch stack's non-shadow path. No default: an empty/
+# run every _v2 step in one invocation, or a single legacy step name to
+# sanity-check the branch stack's legacy path. No default: an empty/
 # omitted steps list means "run everything in DEFAULT_STEPS", which for a
 # branch stack you almost never want by accident (it's the same expensive
 # multi-year legacy pipeline production runs weekly), so this requires it
@@ -179,17 +175,16 @@ invoke-branch:
 # espn-ff-s3-site - reusing them here without an override would silently
 # sync to *production's* bucket instead), then invokes every step needed
 # for a fully-rendering page in one call: the three reports with a _v2
-# replacement (head_to_head/advanced_history/weekly_summary), published to
-# this stack's bucket root too because deploy-branch already set
-# AllowV2RootPublish=true, so what renders is the NEW pipeline's real
-# output, not a re-run of the unchanged legacy code - plus the reports that
-# have no _v2 counterpart at all yet (history, records, owner_habits),
-# which only ever write bucket-root regardless of any flag. Re-run any time
-# after re-invoking individual _v2 steps if you just want a fresh render of
-# what's already been computed, without recomputing everything: `make
-# invoke-branch STEPS='[...]'` alone still writes to the branch bucket root
-# too, same as it always has - render-branch is a convenience for "give me
-# a fully populated site in one shot," not a different upload path.
+# replacement (head_to_head/advanced_history/weekly_summary, cut over to
+# production - DESIGN-incremental-espn-pipeline.md decision #13) write
+# straight to this stack's bucket root, same as every other step, plus the
+# reports that have no _v2 counterpart at all (history, records,
+# owner_habits). Re-run any time after re-invoking individual steps if you
+# just want a fresh render of what's already been computed, without
+# recomputing everything: `make invoke-branch STEPS='[...]'` alone still
+# writes to the branch bucket root too, same as it always has -
+# render-branch is a convenience for "give me a fully populated site in one
+# shot," not a different upload path.
 render-branch:
 	aws s3 sync site/ "s3://$(BRANCH_BUCKET_NAME)/" --region $(AWS_REGION)
 	aws s3 cp league_config.json "s3://$(BRANCH_BUCKET_NAME)/league_config.json" --region $(AWS_REGION)
