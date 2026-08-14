@@ -22,23 +22,38 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 
-from league_reports.config import get_credentials, get_league_config, get_owner_map, year_range
+from league_reports.config import get_credentials, get_league_config, get_owner_map, get_payouts_config, year_range
 from league_reports.reports.advanced_history import build_advanced_history
 from league_reports.reports.advanced_history_v2 import build_advanced_history_v2
 from league_reports.reports.head_to_head import build_head_to_head
 from league_reports.reports.head_to_head_v2 import build_head_to_head_v2
+from league_reports.reports.weekly_summary import (
+    build_survivor_results, build_weekly_efficiency, build_weekly_payouts,
+)
+from league_reports.reports.weekly_summary_v2 import (
+    DEFAULT_AWARDS, build_survivor_results_v2, build_weekly_efficiency_v2, build_weekly_payouts_v2,
+)
 
 FLOAT_TOLERANCE = 0.01  # both reports round to 2 decimals; this just absorbs summation-order noise
+
+# Mirrors lambda_function.py's DEFAULT_LINEUP_CONFIG - duplicated rather than
+# imported from there since lambda_function.py imports boto3 at module scope,
+# which this lightweight script has no other reason to require.
+DEFAULT_LINEUP_CONFIG = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 2, "K": 1, "D/ST": 1}
 
 
 # box_scores() (and everything built on it, per DESIGN.md decision #3's
 # scripts/advanced_history.py note) isn't reliable before 2019 - matches
 # lambda_function.py's year_range(config, span="box_score") for this step.
-DEFAULT_SPAN = {"head_to_head": "full", "advanced_history": "box_score"}
+# weekly_summary only ever processes one season (not a year range), so its
+# default is just league_config.json's configured current year.
+DEFAULT_SPAN = {"head_to_head": "full", "advanced_history": "box_score", "weekly_summary": "current_only"}
 
 
 def _parse_years(spec, config, span="full"):
     if spec is None:
+        if span == "current_only":
+            return [config["years"]["current"]]
         return year_range(config, span=span)
     if "-" in spec:
         start, end = spec.split("-", 1)
@@ -96,7 +111,7 @@ def _diff_frames(key_cols, v1_df, v2_df):
     return clean
 
 
-def compare_head_to_head(config, creds, owner_map, years):
+def compare_head_to_head(config, creds, owner_map, payout_config, years):
     print(f"Building v1 (legacy) head_to_head for {list(years)}...")
     v1 = build_head_to_head(
         league_id=config["league_id"], years=years,
@@ -110,7 +125,7 @@ def compare_head_to_head(config, creds, owner_map, years):
     return _diff_frames(["Owner ID", "Opponent ID"], v1, v2)
 
 
-def compare_advanced_history(config, creds, owner_map, years):
+def compare_advanced_history(config, creds, owner_map, payout_config, years):
     print(f"Building v1 (legacy) advanced_history for {list(years)}...")
     v1 = build_advanced_history(
         league_id=config["league_id"], years=years, owner_map=owner_map,
@@ -124,11 +139,70 @@ def compare_advanced_history(config, creds, owner_map, years):
     return _diff_frames(["Year", "Owner ID"], v1, v2)
 
 
+def compare_weekly_summary(config, creds, owner_map, payout_config, years):
+    years = list(years)
+    year = years[-1]
+    if len(years) != 1:
+        print(f"Note: weekly_summary only processes one season - using {year} (the last of {years})")
+
+    lineup_config = config.get("lineup", DEFAULT_LINEUP_CONFIG)
+    awards = config.get("awards", DEFAULT_AWARDS)
+    last_elimination_week = config.get("survivor", {}).get("last_elimination_week", 12)
+
+    print(f"Building v1 (legacy) weekly_summary for {year}...")
+    v1_eff = build_weekly_efficiency(
+        league_id=config["league_id"], year=year, swid=creds["swid"], espn_s2=creds["espn_s2"],
+        lineup_config=lineup_config, awards=awards,
+    )
+    v1_survivor = build_survivor_results(v1_eff, last_elimination_week=last_elimination_week)
+    v1_payouts = build_weekly_payouts(
+        league_id=config["league_id"], year=year, swid=creds["swid"], espn_s2=creds["espn_s2"],
+        payout_config=payout_config,
+    )
+
+    print(f"Building v2 weekly_summary for {year}...")
+    v2_eff = build_weekly_efficiency_v2(
+        league_id=config["league_id"], year=year, swid=creds["swid"], espn_s2=creds["espn_s2"],
+        lineup_config=lineup_config, awards=awards,
+    )
+    v2_survivor = build_survivor_results_v2(v2_eff, last_elimination_week=last_elimination_week)
+    v2_payouts = build_weekly_payouts_v2(
+        league_id=config["league_id"], year=year, swid=creds["swid"], espn_s2=creds["espn_s2"],
+        payout_config=payout_config,
+    )
+
+    clean = True
+
+    print("\n--- Efficiency ---")
+    if not _diff_frames(["Week", "Team Name"], v1_eff, v2_eff):
+        clean = False
+
+    print("\n--- Survivor ---")
+    if v1_survivor != v2_survivor:
+        clean = False
+        print("MISMATCH:")
+        print("  v1:", v1_survivor)
+        print("  v2:", v2_survivor)
+    else:
+        print(f"Clean: survivor results match ({len(v1_survivor.get('remaining', []))} remaining, "
+              f"{len(v1_survivor.get('eliminated', {}))} eliminated).")
+
+    print("\n--- Payouts ---")
+    if v1_payouts != v2_payouts:
+        clean = False
+        print("MISMATCH:")
+        print("  v1:", v1_payouts)
+        print("  v2:", v2_payouts)
+    else:
+        print(f"Clean: {len(v1_payouts)} payout week(s) match.")
+
+    return clean
+
+
 REPORTS = {
     "head_to_head": compare_head_to_head,
     "advanced_history": compare_advanced_history,
-    # weekly_summary added here once its _v2 module exists
-    # (rollout order step 3 in DESIGN-incremental-espn-pipeline.md)
+    "weekly_summary": compare_weekly_summary,
 }
 
 
@@ -141,9 +215,10 @@ def main():
     config = get_league_config()
     creds = get_credentials()
     owner_map = get_owner_map()
+    payout_config = get_payouts_config()
     years = _parse_years(args.years, config, span=DEFAULT_SPAN.get(args.report, "full"))
 
-    clean = REPORTS[args.report](config, creds, owner_map, years)
+    clean = REPORTS[args.report](config, creds, owner_map, payout_config, years)
 
     if not clean:
         print(f"\n{args.report}: DIFFERENCES FOUND (see above) - expected for head_to_head's "
