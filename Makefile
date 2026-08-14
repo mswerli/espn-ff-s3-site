@@ -77,3 +77,102 @@ sync-config:
 publish-site: sync-site sync-config
 
 .PHONY: site-bucket sync-site sync-config publish-site
+
+# --------------------------------------------------------------------------
+# Parallel/branch infra (.claude/DESIGN-incremental-espn-pipeline.md's live-shadow
+# validation, rollout step 7) - stands up a FULL SECOND COPY of template.yaml's
+# stack (own bucket, own Lambda, own IAM roles, own Secrets Manager secret,
+# own EventBridge schedule) under a stack/bucket/function name derived from
+# the current git branch, so a feature branch can exercise the real Lambda/
+# EventBridge/IAM path end-to-end - not just the scratch-bucket local-Python
+# testing this branch has used so far - without ever touching the production
+# stack (`espn-ff-s3-site`, the STACK_NAME default above). Every generated
+# name below is a real AWS resource identifier (S3 bucket name, Lambda
+# function name) so it's sanitized (lowercase, non-alnum -> '-', collapsed,
+# trimmed) and truncated - S3 bucket names cap at 63 chars total - from the
+# raw branch name rather than used as-is.
+AWS_ACCOUNT_ID := $(shell aws sts get-caller-identity --query Account --output text)
+BRANCH_SLUG := $(shell git rev-parse --abbrev-ref HEAD | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$$//' | cut -c1-20)
+BRANCH_STACK_NAME := espn-ff-s3-site-$(BRANCH_SLUG)
+BRANCH_BUCKET_NAME := espn-ff-site-$(AWS_ACCOUNT_ID)-$(BRANCH_SLUG)
+BRANCH_FUNCTION_NAME := espn-ff-data-generator-$(BRANCH_SLUG)
+
+# PandasLayerArn: NOT auto-looked-up. `aws lambda list-layers` only
+# enumerates layers owned by *your own* account - the AWS-managed
+# AWSSDKPandas-Python311 layer lives in a separate, AWS-owned publisher
+# account (336392948345 as of this writing), and that account denies
+# cross-account lambda:ListLayerVersions, so there is no CLI call that
+# discovers "the latest version" the way [[aws-account-setup]]'s original
+# note assumed - confirmed empirically while building this target (the
+# list-layers query returns nothing in this account; get-layer-version-by-arn
+# against a known version does work, since AWS-managed layers ARE
+# cross-account *usable*, just not cross-account *listable*). So: a plain
+# override-able default, last confirmed valid via get-layer-version-by-arn
+# on the date below. Refresh it by trying successive version numbers
+# against get-layer-version-by-arn (or checking
+# https://aws-sdk-pandas.readthedocs.io/ 's layer ARN table) when a deploy
+# ever fails on this - override with `make deploy-branch PANDAS_LAYER_ARN=...`
+# rather than editing this default for a one-off.
+PANDAS_LAYER_ARN ?= arn:aws:lambda:us-west-2:336392948345:layer:AWSSDKPandas-Python311:35
+
+# ScheduleState=DISABLED (template.yaml) so a branch stack never runs its own
+# unattended weekly ESPN pull on top of production's - the Lambda is still
+# fully invokable by name (see invoke-branch below), only the automatic
+# trigger is off. EspnSwid/EspnEspnS2 come from the same local
+# ignore/espn_creds.json every other local script already reads - no new
+# credential handling introduced for this.
+deploy-branch:
+	@test -f ignore/espn_creds.json || (echo "ignore/espn_creds.json not found - see README.md's Local development step 2" && exit 1)
+	@echo "Deploying branch stack: $(BRANCH_STACK_NAME) (bucket $(BRANCH_BUCKET_NAME), function $(BRANCH_FUNCTION_NAME), schedule DISABLED)"
+	@SWID=$$(python3 -c "import json; print(json.load(open('ignore/espn_creds.json'))['swid'])"); \
+	ESPN_S2=$$(python3 -c "import json; print(json.load(open('ignore/espn_creds.json'))['espn_s2'])"); \
+	sam build && \
+	sam deploy \
+		--stack-name $(BRANCH_STACK_NAME) \
+		--region $(AWS_REGION) \
+		--resolve-s3 \
+		--capabilities CAPABILITY_NAMED_IAM \
+		--no-confirm-changeset \
+		--parameter-overrides \
+			SiteBucketName=$(BRANCH_BUCKET_NAME) \
+			FunctionName=$(BRANCH_FUNCTION_NAME) \
+			ScheduleState=DISABLED \
+			PandasLayerArn=$(PANDAS_LAYER_ARN) \
+			EspnSwid=$$SWID \
+			EspnEspnS2=$$ESPN_S2
+	@echo "Branch stack deployed: $(BRANCH_STACK_NAME)"
+	@echo "  make publish-site STACK_NAME=$(BRANCH_STACK_NAME)   # push site/ + league_config.json to it"
+	@echo "  make invoke-branch STEPS='[\"head_to_head_v2\"]'      # manually invoke its Lambda"
+	@echo "  make destroy-branch                                 # tear it down when done"
+
+# STEPS is the literal JSON list that becomes the Lambda event's "steps" key
+# (lambda_function.py's STEPS registry, DESIGN.md decision #10b) - e.g.
+# STEPS='["head_to_head_v2","advanced_history_v2","weekly_summary_v2"]' to
+# run every _v2 shadow step in one invocation, or a single legacy step name
+# to sanity-check the branch stack's non-shadow path. No default: an empty/
+# omitted steps list means "run everything in DEFAULT_STEPS", which for a
+# branch stack you almost never want by accident (it's the same expensive
+# multi-year legacy pipeline production runs weekly), so this requires it
+# explicit rather than silently defaulting.
+invoke-branch:
+	@test -n "$(STEPS)" || (echo "Usage: make invoke-branch STEPS='[\"head_to_head_v2\"]'" && exit 1)
+	aws lambda invoke \
+		--function-name $(BRANCH_FUNCTION_NAME) \
+		--region $(AWS_REGION) \
+		--cli-read-timeout 900 \
+		--payload '{"steps": $(STEPS)}' \
+		--cli-binary-format raw-in-base64-out \
+		/tmp/branch-invoke-response.json
+	@cat /tmp/branch-invoke-response.json && echo
+
+# `sam delete` removes the whole stack (bucket, Lambda, roles, secret,
+# schedule) in one go, including emptying the bucket first (SAM CLI prompts
+# for that; --no-prompts accepts it). See project memory: this account's
+# Secrets Manager secret deletions via stack deletion have been observed to
+# be immediate rather than the usual 30-day recovery window, so a
+# re-deploy-branch under the same branch name right after a destroy-branch
+# won't hit a "secret scheduled for deletion" name conflict.
+destroy-branch:
+	sam delete --stack-name $(BRANCH_STACK_NAME) --region $(AWS_REGION) --no-prompts
+
+.PHONY: deploy-branch invoke-branch destroy-branch

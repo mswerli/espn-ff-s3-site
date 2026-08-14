@@ -67,6 +67,28 @@ Parameters:
       function, its role, log group, and the espn-creds secret name below) -
       don't change it as a side effect of a routine deploy.
 
+  ScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+    Description: >
+      EventBridge Scheduler state for WeeklyDataRefreshSchedule. Defaults to
+      ENABLED - today's production behavior, unchanged for the existing
+      stack unless this is explicitly overridden. Override to DISABLED for
+      a second, parallel stack (see Makefile's deploy-branch target and
+      .claude/DESIGN-incremental-espn-pipeline.md's live-shadow validation
+      step) so a feature-branch deploy never runs its own unattended weekly
+      ESPN pull on top of production's - that stack's Lambda is still fully
+      invokable by name/`aws lambda invoke` for manual live testing, only
+      the automatic trigger is off. This is a smaller, single-schedule
+      stand-in for the ScheduleState parameter .claude/DESIGN.md decision
+      #10 already planned for the eventual live/weekly-tier schedule split
+      (.claude/TODO-backend.md "Incremental data generation") - not a
+      replacement for that, just pulled forward because parallel-stack
+      deploys need it now.
+
 Resources:
   # --- Static site bucket (frontend-owned; .claude/TODO-frontend.md "Infrastructure") ----
   # Plain S3 static website hosting, no CloudFront/OAC (.claude/DESIGN.md decision #1) -
@@ -179,6 +201,61 @@ Resources:
                   - !Sub "arn:aws:s3:::${SiteBucketName}/league_config.json"
                   - !Sub "arn:aws:s3:::${SiteBucketName}/config/owner_map.json"
                   - !Sub "arn:aws:s3:::${SiteBucketName}/config/weekly_payouts_config.json"
+        - PolicyName: ReadWriteLeaguesPrefix
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # DESIGN.md decision #12's leagues/* grant, pulled forward from
+              # TODO-backend.md's not-yet-built "Multi-league support" item -
+              # needed now (not later) by the _v2 shadow steps
+              # (DESIGN-incremental-espn-pipeline.md decision #13): the
+              # per-year cache (league_reports/cache.py), the shared raw
+              # box-score cache (league_reports/box_score_cache.py), and the
+              # shadow/ publish prefix all live under
+              # leagues/<league_id>/... - none of which the explicit-key
+              # WriteDataFiles/ReadConfig policies above cover, since those
+              # predate decision #12/#13 and only know about the flat
+              # bucket-root filenames. Discovered missing by actually
+              # deploying and invoking a parallel branch stack (Makefile's
+              # deploy-branch/invoke-branch) - every _v2 step failed with
+              # AccessDenied against a real IAM role until this was added,
+              # something the local scratch-bucket testing this branch had
+              # relied on until now couldn't catch, since that ran under a
+              # much broader IAM user, not this role. `leagues/` (not a bare
+              # prefix wildcard off the bucket root) is deliberate, same
+              # reasoning as decision #12: one unambiguous prefix to grant
+              # against, no risk of colliding with index.html/style.css/a
+              # future top-level frontend asset.
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${SiteBucketName}/leagues/*"
+              # s3:ListBucket, scoped to the leagues/ prefix via the
+              # s3:prefix condition (ListBucket is always a bucket-ARN
+              # action, never an object-ARN one, hence no /leagues/* here).
+              # Without this, GetObject against a key that doesn't exist yet
+              # (the normal, expected case for a first-ever cache read - see
+              # league_reports/cache.py's/box_score_cache.py's NoSuchKey
+              # handling) comes back as 403 AccessDenied instead of 404
+              # NoSuchKey, because S3 won't confirm-or-deny a key's
+              # existence to a caller with no ListBucket permission at all.
+              # cache.py/box_score_cache.py only ever special-case NoSuchKey/
+              # 404 as "not cached yet, compute it" - an AccessDenied instead
+              # propagates as a real error, which every _v2 step's per-year/
+              # per-week try/except then quietly swallows as "skip this
+              # year/week" rather than falling back to computing it. Found
+              # exactly this way: a real deploy-branch + invoke-branch run
+              # silently dropped every closed year's data before this was
+              # added, something no amount of local scratch-bucket testing
+              # under a broader IAM user could have surfaced.
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${SiteBucketName}"
+                Condition:
+                  StringLike:
+                    s3:prefix: "leagues/*"
         - PolicyName: ReadEspnCreds
           PolicyDocument:
             Version: "2012-10-17"
@@ -275,7 +352,7 @@ Resources:
       ScheduleExpressionTimezone: America/Chicago
       FlexibleTimeWindow:
         Mode: "OFF"
-      State: ENABLED
+      State: !Ref ScheduleState
       Target:
         Arn: !GetAtt DataGeneratorFunction.Arn
         RoleArn: !GetAtt SchedulerExecutionRole.Arn
