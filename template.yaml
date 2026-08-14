@@ -340,15 +340,21 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt DataGeneratorFunction.Arn
 
+  # Cadence-tier split (decision #10, finalized): a "weekly" tier for the season-level
+  # rollups (once/week, after everything's final) and a "payout" tier for
+  # weekly_summary_v2 alone (hourly, only during the windows real games are being played -
+  # confirmed with Morrie, see decision #10's status note). Both share ScheduleState so
+  # they can be toggled off together in the offseason with one parameter override.
+
   WeeklyDataRefreshSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
       Name: !Sub "${FunctionName}-weekly"
       Description: >
-        Weekly trigger, in-season. PLACEHOLDER: Tuesday 09:00 America/Chicago
-        (after Monday Night Football) - confirm the exact day/time with
-        Morrie before relying on this in prod (.claude/TODO-backend.md).
-      ScheduleExpression: "cron(0 9 ? * TUE *)"
+        Weekly season-rollup trigger, in-season. Tuesday 17:00 America/Chicago -
+        after Monday Night Football has finished and the payout tier's Tue 00:00/01:00
+        runs have already closed out the week's box scores.
+      ScheduleExpression: "cron(0 17 ? * TUE *)"
       ScheduleExpressionTimezone: America/Chicago
       FlexibleTimeWindow:
         Mode: "OFF"
@@ -358,12 +364,99 @@ Resources:
         RoleArn: !GetAtt SchedulerExecutionRole.Arn
         # Explicit Input rather than an empty event, per decision #10b's own
         # reasoning: a schedule shouldn't lean on the handler's DEFAULT_STEPS
-        # fallback (that fallback exists for manual/console invokes). Kept
-        # in sync with lambda_function.py's DEFAULT_STEPS by hand - matches
-        # it exactly as of the decision #13 cutover (head_to_head_v2/
-        # advanced_history_v2/weekly_summary_v2 in place of their legacy
-        # counterparts; history/records stay legacy; owner_habits excluded).
-        Input: '{"steps": ["history", "head_to_head_v2", "advanced_history_v2", "records_v2", "weekly_summary_v2"]}'
+        # fallback (that fallback exists for manual/console invokes).
+        # weekly_summary_v2 is deliberately NOT in this list - it's covered by
+        # its own payout-tier schedules below, which already close out the
+        # week (last run Tue 01:00, before this 17:00 run).
+        Input: '{"steps": ["history", "head_to_head_v2", "advanced_history_v2", "records_v2"]}'
+
+  # Payout tier: weekly_summary_v2 only, hourly, windowed around actual NFL game times
+  # (America/Chicago, matching the weekly tier above). AWS Scheduler cron can't express a
+  # window that crosses midnight in one expression, so each game night is two resources -
+  # one for the start day's evening hours, one for the next day's early-morning hours.
+  PayoutRefreshScheduleThu:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${FunctionName}-payout-thu"
+      Description: >
+        Thursday Night Football window, part 1: Thu 21:00-23:00 America/Chicago, hourly.
+      ScheduleExpression: "cron(0 21-23 ? * THU *)"
+      ScheduleExpressionTimezone: America/Chicago
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref ScheduleState
+      Target:
+        Arn: !GetAtt DataGeneratorFunction.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: '{"steps": ["weekly_summary_v2"]}'
+
+  PayoutRefreshScheduleFri:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${FunctionName}-payout-fri"
+      Description: >
+        Thursday Night Football window, part 2: Fri 00:00-01:00 America/Chicago, hourly
+        (the Thu 21:00-Fri 01:00 window split across the midnight boundary).
+      ScheduleExpression: "cron(0 0-1 ? * FRI *)"
+      ScheduleExpressionTimezone: America/Chicago
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref ScheduleState
+      Target:
+        Arn: !GetAtt DataGeneratorFunction.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: '{"steps": ["weekly_summary_v2"]}'
+
+  PayoutRefreshScheduleSun:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${FunctionName}-payout-sun"
+      Description: >
+        Sunday slate window: Sun 14:00-23:00 America/Chicago, hourly (early games through
+        Sunday Night Football).
+      ScheduleExpression: "cron(0 14-23 ? * SUN *)"
+      ScheduleExpressionTimezone: America/Chicago
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref ScheduleState
+      Target:
+        Arn: !GetAtt DataGeneratorFunction.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: '{"steps": ["weekly_summary_v2"]}'
+
+  PayoutRefreshScheduleMon:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${FunctionName}-payout-mon"
+      Description: >
+        Monday Night Football window, part 1: Mon 21:00-23:00 America/Chicago, hourly.
+      ScheduleExpression: "cron(0 21-23 ? * MON *)"
+      ScheduleExpressionTimezone: America/Chicago
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref ScheduleState
+      Target:
+        Arn: !GetAtt DataGeneratorFunction.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: '{"steps": ["weekly_summary_v2"]}'
+
+  PayoutRefreshScheduleTue:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${FunctionName}-payout-tue"
+      Description: >
+        Monday Night Football window, part 2: Tue 00:00-01:00 America/Chicago, hourly
+        (the Mon 21:00-Tue 01:00 window split across the midnight boundary) - this is the
+        last payout-tier run before the weekly tier's Tue 17:00 rollup.
+      ScheduleExpression: "cron(0 0-1 ? * TUE *)"
+      ScheduleExpressionTimezone: America/Chicago
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      State: !Ref ScheduleState
+      Target:
+        Arn: !GetAtt DataGeneratorFunction.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: '{"steps": ["weekly_summary_v2"]}'
 
 Outputs:
   SiteBucketWebsiteURL:

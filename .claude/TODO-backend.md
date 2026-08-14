@@ -6,19 +6,13 @@ Execution checklist for the Lambda that regenerates the site's CSV/JSON data. Ra
 Done and deployed: Phase 1 (Prep), the Lambda handler + Lambda-side `template.yaml` infra, initial
 testing, decision #13 (incremental current-year refresh — shared `League()` fetch, per-year + raw
 box-score caching, `head_to_head`/`advanced_history`/`records`/`weekly_summary` cut over to
-production), and decision #11 (weekly-summary backfill + retention — `event["year"]` override,
-`archive/` season-stamped copies). See [DESIGN.md](DESIGN.md) and
+production), decision #11 (weekly-summary backfill + retention — `event["year"]` override,
+`archive/` season-stamped copies), and decision #10's cadence-tier schedule split (weekly rollup
+Tuesday 17:00; `weekly_summary_v2` payout tier hourly during Thu/Sun/Mon game windows — see
+DESIGN.md decision #10's status table for the exact cron expressions). See [DESIGN.md](DESIGN.md) and
 [DESIGN-incremental-espn-pipeline.md](DESIGN-incremental-espn-pipeline.md) for what shipped, `git log`
 for when, [[espn-ff-live-infra]] memory for what's live today. This file only tracks what's still open.
 
-## Cadence-tier schedule split (DESIGN.md decision #10)
-
-- [ ] `template.yaml`: replace the single `WeeklyDataRefreshSchedule` with two
-      `AWS::Scheduler::Schedule` resources — live tier: `weekly_summary_v2` only, several times per
-      game day; weekly tier: everything else, once/week — each with an explicit `Input`; a
-      `ScheduleState` parameter per schedule for offseason toggling
-- [ ] Confirm live-tier cron hours with Morrie against actual game-day timing (still just a starting
-      guess)
 - [ ] Frontend follow-up: whether/how `site/` ever surfaces `archive/` files (decision #11's
       season-stamped weekly-summary copies) — flag for [TODO-frontend.md](TODO-frontend.md) if wanted,
       not required for any backend item

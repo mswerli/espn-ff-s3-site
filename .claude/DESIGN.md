@@ -296,7 +296,7 @@ EventBridge Scheduler, weekly cron during the NFL season (e.g. Tuesday morning a
 Football). The Lambda can also be invoked manually via the AWS console/CLI for on-demand refresh — no
 public API Gateway endpoint is needed for a personal project.
 
-### 10. Incremental data generation: per-year season cache + configurable per-invocation steps
+### 10. Incremental data generation: per-year season cache + configurable per-invocation steps — done
 
 **Problem.** Every one of the six report-building functions loops over the *entire* configured year
 range (`year_range(config, span=...)`, currently 2013/2019–2025) on every single invocation, whether
@@ -401,10 +401,33 @@ should lean on. Both get a `ScheduleState` parameter (`ENABLED`/`DISABLED`, foll
 "confirm exact day/time... in-season" placeholder note) so they can be toggled off in the offseason
 without a template change, just a parameter override.
 
-The live-tier cron's exact hours are a starting guess (covers early/late Sunday windows and
-Thu/Mon night reasonably but not perfectly — e.g. it'll catch Sunday Night Football only partway
-through) — tune once real game-day timing is confirmed, same spirit as the existing "confirm exact
-day/time with Morrie" note on the current schedule.
+**Status: done, deployed.** The final cadence differs slightly from the table above once real
+game-day hours were confirmed with Morrie:
+
+| Schedule (template.yaml) | Steps | Cron (America/Chicago) | Covers |
+|---|---|---|---|
+| `WeeklyDataRefreshSchedule` | `history`, `head_to_head_v2`, `advanced_history_v2`, `records_v2` | `cron(0 17 ? * TUE *)` | Tuesday 17:00, once/week |
+| `PayoutRefreshScheduleThu` / `...Fri` | `weekly_summary_v2` | `cron(0 21-23 ? * THU *)` / `cron(0 0-1 ? * FRI *)` | Thursday Night Football (Thu 21:00–Fri 01:00, hourly) |
+| `PayoutRefreshScheduleSun` | `weekly_summary_v2` | `cron(0 14-23 ? * SUN *)` | Sunday slate (14:00–23:00, hourly) |
+| `PayoutRefreshScheduleMon` / `...Tue` | `weekly_summary_v2` | `cron(0 21-23 ? * MON *)` / `cron(0 0-1 ? * TUE *)` | Monday Night Football (Mon 21:00–Tue 01:00, hourly) |
+
+Differences from the original proposal above:
+- **`weekly_summary_v2` dropped from the weekly-tier `Input`.** The original plan re-ran it once on
+  Tuesday morning as a "settled confirmation pass" on top of the live tier's last snapshot. Skipped —
+  the payout tier's last run (Tue 01:00) already lands after Monday Night Football ends, so a same-day
+  17:00 rerun would be redundant. If a real gap between 01:00 and 17:00 ever turns out to matter (e.g.
+  a late stat correction from ESPN), add `weekly_summary_v2` back to `WeeklyDataRefreshSchedule`'s
+  `Input` — cheap, no code change needed.
+- **AWS Scheduler cron can't express a window crossing midnight in one expression**, so each game
+  night (Thu, Mon) is two `AWS::Scheduler::Schedule` resources instead of one — one for the evening
+  hours on the start day, one for the early-morning hours on the next day. Sunday doesn't cross
+  midnight so it's a single resource.
+- All schedules share the existing `ScheduleState` parameter, so the whole cluster (weekly + all four
+  payout-window resources) toggles off together for the offseason with one parameter override — no
+  per-tier `ScheduleState` parameters were added, since there was no need to toggle the tiers
+  independently in practice.
+- No Lambda code changes were needed for this — decision #10b's step registry and explicit
+  per-invocation `steps` already existed, this was purely a `template.yaml` change.
 
 #### New IAM surface
 
