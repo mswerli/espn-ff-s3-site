@@ -58,5 +58,12 @@ def build_owner_habits(league_id, years, swid, espn_s2):
             "Drafted Seasons": " / ".join(map(str, seasons))
         })
 
-    df = pd.DataFrame(rows)
+    # DESIGN.md decision #15f: a league with no draft yet (e.g.
+    # all-for-the-shiva pre-draft - league.draft is just an empty list, no
+    # exception) produces an empty `rows`, and pd.DataFrame([]) has no
+    # columns at all - sort_values(by="Times Drafted") would KeyError on a
+    # column that doesn't exist rather than returning the expected empty
+    # report, same class of fix as head_to_head_v2.py/weekly_summary_v2.py.
+    columns = ["Owner ID", "Owner Name", "Most Drafted Player", "Times Drafted", "Drafted Seasons"]
+    df = pd.DataFrame(rows, columns=columns)
     return df.sort_values(by="Times Drafted", ascending=False)

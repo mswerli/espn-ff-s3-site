@@ -218,7 +218,20 @@ def build_weekly_efficiency_v2_cached(league_id, year, current_year, swid, espn_
 def build_survivor_results_v2(efficiency_df, last_elimination_week=12):
     """Unchanged from v1's build_survivor_results in every way but name -
     this only post-processes an already-built efficiency DataFrame, no
-    ESPN calls of its own to cache."""
+    ESPN calls of its own to cache.
+
+    DESIGN.md decision #15f: a brand-new league with zero completed weeks
+    yet (e.g. all-for-the-shiva pre-draft) passes in an empty efficiency_df
+    with no columns at all - sort_values(by=["Week", ...]) would KeyError on
+    a column that doesn't exist. There's no elimination to report yet and no
+    team list to fall back on (this function only ever sees the efficiency
+    data, not the roster), so the correct empty-safe answer is "nobody
+    eliminated, nobody known to be remaining either" - the front end already
+    renders an empty survivor list as nothing to show, same as every other
+    report's empty-degrade."""
+    if efficiency_df.empty:
+        return {"eliminated": {}, "remaining": []}
+
     df = efficiency_df.sort_values(by=["Week", "Actual Points"])
 
     eliminated = {}

@@ -915,6 +915,33 @@ zero history and fills in from its actual first ESPN-native season onward, match
   `weekly_summary.py` (v1, not running in production) keeps the old hardcoded default — not touched,
   same precedent as every other v1/v2 divergence in this project.
 
+**Found only by actually deploying and invoking the real stack** (not predictable from the probe above —
+the probe only exercised `League()` construction, not the report modules' final aggregation step): a
+brand-new, zero-completed-weeks league (pre-draft, exactly all-for-the-shiva's 2026 state) makes every
+per-year fetch fail (bounded-empty via the existing `except: continue` swallow, as expected — see the
+main design note above), which means every report's *final* DataFrame-building step receives a truly
+empty input for the first time ever. Three of them crashed there instead of degrading, because
+`pd.DataFrame([])` has **no columns at all**, and each called `.sort_values(by=<column name>)` on it
+unconditionally:
+- `head_to_head_v2.py`'s `merge_head_to_head_partials()` — `KeyError: 'Owner Name'`
+- `owner_habits.py`'s `build_owner_habits()` — `KeyError: 'Times Drafted'`
+- `weekly_summary_v2.py`'s `build_survivor_results_v2()` — `KeyError: 'Week'` (this one's in
+  `DEFAULT_STEPS`, so it would've failed on *every* scheduled run until week 1's data existed, not just
+  a one-off manual invoke)
+
+All three fixed the same way: explicit `columns=[...]` on the empty-case `pd.DataFrame(...)` call (or,
+for `build_survivor_results_v2`, an explicit `{"eliminated": {}, "remaining": []}` early return, since
+that function only ever sees already-aggregated data, not a team list to fall back on) — same "just
+empty, don't crash" contract every other report already had for a partially-empty season
+(`records_v2`/`advanced_history_v2`/`history.py` all handled this correctly already, since who-dat's
+`except: continue` swallow had already been exercised by real ESPN hiccups over the life of this
+project — this specific *fully*-empty-season case just never came up before there was a league with no
+completed weeks at all). Re-deployed to both stacks; confirmed all 6 steps succeed clean against
+all-for-the-shiva (`survivor_results.json` → `{"eliminated": {}, "remaining": []}`,
+`weekly_payout_winners.json` → `[]`, `head_to_head_lifetime.csv` → header row only) and confirmed
+byte-shape-unchanged against who-dat's real data (non-empty path takes the identical column order as
+before, verified against the live site).
+
 #### 15g. Weekly payouts are optional per league, not every league's thing
 
 Raised alongside the second league: "some leagues have weekly payouts but some do not." Before this,

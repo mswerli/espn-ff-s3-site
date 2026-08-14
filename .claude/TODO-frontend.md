@@ -30,9 +30,9 @@ and deployed — see DESIGN.md decisions #1/#4/#7 for the rationale, `git log` f
       missing/failed file just silently leaves a table empty. Worth a "data last updated" indicator
       or a visible error state once the pipeline is live and a failure becomes an unattended-Lambda
       risk rather than a "did I forget to copy the file up" one.
-- [ ] **Breaking, flagged by the backend's multi-league work (DESIGN.md decision #12, TODO-backend.md
-      "Multi-league support"):** once the Lambda partitions its outputs under `leagues/<league_id>/`,
-      `index.html`'s bare-filename `fetch("league_history.csv")`-style calls (decision #7's table) stop
-      resolving. Needs a front-end answer — a league picker, a query-string/subpath league selector, a
-      per-league `site/` deploy, etc. — not designed by the backend side; not urgent until decision #12
-      actually ships (still single-league today).
+- ~~Breaking, flagged by the backend's multi-league work~~ — resolved by DESIGN.md decision #15
+      (supersedes decision #12): multi-league support landed as **separate per-league sites** (their
+      own bucket, deployed via the same `site/`), not one shared bucket with a `leagues/<league_id>/`
+      prefix — so `index.html`'s bare-filename `fetch()` calls never needed to change at all. Two
+      leagues live today (`who-dat`, `all-for-the-shiva`); `site/`/`style.css` are unmodified, deployed
+      identically to both via `make publish-site LEAGUE=<slug>`.

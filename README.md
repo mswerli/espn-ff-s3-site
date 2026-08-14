@@ -8,10 +8,10 @@ This repo has completed **Phase 1 (Prep)** and **Phase 2 (static hosting)**: the
 code has been ported into an importable `league_reports/` package, and the S3 site bucket is
 deployed and live at `http://espn-ff-site-217412666418.s3-website-us-west-2.amazonaws.com` (stack
 `espn-ff-s3-site`, region `us-west-2`), seeded with
-`site/` plus one-time manually-copied sample data (see .claude/TODO-frontend.md). `lambda_function.py` and
-its `template.yaml` resources are also built and deployed (Phase 3+, see .claude/TODO-backend.md for that
-work's status) - the weekly schedule exists, but its season-cache/multi-league refinements are
-still in progress there.
+`site/` plus real generated data. `lambda_function.py` and its `template.yaml` resources are also built
+and deployed (Phase 3+, see .claude/TODO-backend.md for that work's status) - per-year caching, a
+cadence-tiered schedule, and multi-league support (two leagues live today, each its own stack - see
+DESIGN.md decision #15 and `leagues/registry.json`) are all done.
 
 ## Local development
 
@@ -26,17 +26,23 @@ still in progress there.
    layer instead, see .claude/DESIGN.md decision #3. `requirements-dev.txt` adds `pandas` on top, for
    running `scripts/*.py` locally.)
 
-2. Credentials and owner map (gitignored, not secret-free):
+2. This repo drives more than one league (DESIGN.md decision #15) - which one local scripts use is
+   `FF_LEAGUE` (env var, defaults to `who-dat`; see `leagues/registry.json` for every league's slug).
+   Credentials are shared across every league (one ESPN login, decision #12c); the owner map is
+   per-league and gitignored, not secret-free:
 
    ```
-   cp config/espn_creds.example.json ignore/espn_creds.json    # fill in swid/espn_s2
-   cp config/owner_map.example.json ignore/owner_map.json      # team_id -> initials
+   cp config/espn_creds.example.json ignore/espn_creds.json               # fill in swid/espn_s2, shared
+   mkdir -p ignore/leagues/who-dat
+   cp leagues/owner_map.example.json ignore/leagues/who-dat/owner_map.json  # team_id -> initials
    ```
 
-3. League settings live in `league_config.json` (league id, year range,
-   site title, award names, lineup slots, survivor cutoff) - not secret,
-   safe to commit. `config/weekly_payouts_config.json` holds this season's
-   weekly side-bet rules.
+   (For a different league: `FF_LEAGUE=<slug> ...` and `ignore/leagues/<slug>/owner_map.json`.)
+
+3. League settings live in `leagues/<slug>/league_config.json` (league id, year range, site title,
+   award names, lineup slots, survivor cutoff) - not secret, safe to commit.
+   `leagues/<slug>/weekly_payouts_config.json` holds that league's weekly side-bet rules (optional -
+   not every league runs payouts).
 
 4. Generate the data:
 
@@ -67,12 +73,16 @@ still in progress there.
 
 ```
 .claude/DESIGN.md                    # AWS architecture design + rollout plan
-league_config.json           # per-league settings (not secret)
+leagues/                     # one directory per league (DESIGN.md decision #15) - not secret
+  registry.json                 # slug -> deployed stack/bucket/function names
+  <slug>/league_config.json        # league id, year range, site title, award names, lineup, ...
+  <slug>/weekly_payouts_config.json  # that league's weekly side-bet rules (optional)
+  owner_map.example.json        # template - copy to ignore/leagues/<slug>/owner_map.json
 config/
-  weekly_payouts_config.json   # payout rules per week
-  espn_creds.example.json      # template - copy to ignore/espn_creds.json
-  owner_map.example.json       # template - copy to ignore/owner_map.json
-ignore/                      # gitignored: real creds + owner map
+  espn_creds.example.json      # template - copy to ignore/espn_creds.json (shared across leagues)
+ignore/                      # gitignored: real creds (shared) + per-league owner maps
+  espn_creds.json
+  leagues/<slug>/owner_map.json
 league_reports/              # shared report-building code
   espn_client.py                # retry-wrapped League() construction
   config.py                     # local-file config/credential loading

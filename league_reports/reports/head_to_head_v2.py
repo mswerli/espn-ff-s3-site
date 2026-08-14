@@ -135,7 +135,17 @@ def merge_head_to_head_partials(year_partials):
             **stats
         })
 
-    df = pd.DataFrame(records)
+    # DESIGN.md decision #15f: a brand-new league with zero completed weeks
+    # yet (every year_partials entry failed/empty - e.g. all-for-the-shiva
+    # pre-draft) produces an empty `records`, and pd.DataFrame([]) has no
+    # columns at all - sort_values(by=['Owner Name', ...]) would KeyError on
+    # a column that doesn't exist rather than returning the expected empty
+    # report. Explicit columns keep this the same "just empty" degrade every
+    # other report already has (records_v2/advanced_history_v2/history.py),
+    # not a crash.
+    columns = ['Owner ID', 'Owner Name', 'Opponent ID', 'Opponent Name', 'Win %',
+               'Wins', 'Losses', 'Ties', 'Games Played', 'Points For', 'Points Against']
+    df = pd.DataFrame(records, columns=columns)
     return df.sort_values(by=['Owner Name', 'Opponent Name'])
 
 
