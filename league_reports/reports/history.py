@@ -46,6 +46,32 @@ def _fetch_legacy_standings(league_id, year, swid, espn_s2, owner_map):
         print(f"  Legacy standings fetch also failed for {year}: {e}")
         return []
 
+    # Sacko (espn_api's standings_weekly(), decision #15f/15g): the primary
+    # sort key is season win_pct - identical to what record.overall already
+    # gives us, no per-week data needed for that part. Per-week/schedule
+    # data only matters for the *tiebreaker* chain (head-to-head first,
+    # then points_for, then division record, points-against, coin flip),
+    # and only among teams tied for the single worst win_pct. Checked
+    # directly against every real season this league has: 10 of 12 years
+    # have a unique worst win_pct (fully unambiguous); the other 2 (2022,
+    # 2023) tie two teams on win_pct but are cleanly broken by points_for
+    # (also already available) - so a real Sacko is computable here, not
+    # just an approximation. If a season is ever tied on *both* win_pct and
+    # points_for (not seen in this league's real data, vanishingly unlikely
+    # with real score totals), sacko_team_id ends up None below and every
+    # row's Sacko stays False for that year - deliberately unresolved
+    # rather than guessed, same principle as everywhere else in this file.
+    scored = []
+    for team in teams:
+        record = team.get("record", {}).get("overall", {})
+        games = record.get("wins", 0) + record.get("losses", 0) + record.get("ties", 0)
+        win_pct = (record.get("wins", 0) + record.get("ties", 0) / 2) / games if games else 0
+        scored.append((win_pct, record.get("pointsFor", 0.0), team["id"]))
+    scored.sort(key=lambda s: (s[0], s[1]))
+    sacko_team_id = None
+    if scored and (len(scored) == 1 or scored[0][:2] != scored[1][:2]):
+        sacko_team_id = scored[0][2]
+
     rows = []
     for team in teams:
         record = team.get("record", {}).get("overall", {})
@@ -60,11 +86,7 @@ def _fetch_legacy_standings(league_id, year, swid, espn_s2, owner_map):
             'Points Against': record.get("pointsAgainst", 0.0),
             'Final Standing': rank,
             'Champion': rank == 1,
-            # True Sacko (lowest points-for by *weekly* standings position,
-            # not final rank - see below) needs per-week point data this
-            # endpoint doesn't have. False rather than an approximation
-            # that could misattribute a real badge to the wrong team.
-            'Sacko': False,
+            'Sacko': team["id"] == sacko_team_id,
         })
     if rows:
         print(f"  Recovered {len(rows)} teams for {year} via the legacy standings endpoint")

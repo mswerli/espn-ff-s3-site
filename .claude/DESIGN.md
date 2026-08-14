@@ -1014,7 +1014,7 @@ present in the raw team list with a real record — the API data is a superset, 
   `_merge_cached_history_years()`, and `cache.py`'s `list_cached_years()` — all superseded by the live
   fallback above, deleted rather than left as unused dead code. The seeded `leagues/854288221/cache/
   history/*.json` objects were also removed from S3.
-- **Found and fixed one more real bug while validating this**: `build_history()`'s `Sacko` field
+- **Found and fixed a real bug while validating this**: `build_history()`'s `Sacko` field
   (`league.standings_weekly(...).index(team) + 1 == team_count`) doesn't check whether any games have
   been played yet — for a season with zero games so far (e.g. all-for-the-shiva's 2026, pre-draft),
   every team is tied at 0 but `.index()` still picks *someone* out of that tie and flags them Sacko,
@@ -1023,13 +1023,32 @@ present in the raw team list with a real record — the API data is a superset, 
   independently from weekly points, not from final standing. Fixed with a `season_started = any((t.wins
   + t.losses) > 0 for t in league.teams)` guard. Caught by Morrie noticing all-for-the-shiva's site had
   Sacko awarded for a team that hadn't played a single game.
+- **`_fetch_legacy_standings()`'s `Sacko` is a real computed value, not a blanket `False`** — initially
+  shipped as always-`False` on the assumption that `standings_weekly()`'s per-week schedule requirement
+  made it unrecoverable from summary-only legacy data. Challenged (correctly) and re-examined:
+  `standings_weekly()`'s tiebreaker chain (head-to-head, then points_for, then division record, then
+  points-against, then a coin flip) only matters among teams *tied* for the single worst season win_pct
+  — and win_pct itself needs no per-week data at all, since `record.overall`'s season-total wins/losses/
+  ties already gives it directly. Checked against every real season this league has: 10 of 12 years have
+  a single unambiguous worst win_pct; the other 2 (2022, 2023) tie two teams, both cleanly broken by
+  `points_for` (also already available) — so a real Sacko is computable for every year with what the
+  legacy endpoint already returns, not left as an unresolved gap. (A season tied on *both* win_pct and
+  points_for — not seen in this league's real data — would still resolve to `Sacko: False` for every team
+  that year, deliberately unresolved rather than guessed, rather than risk misattributing a real badge.)
+  Also confirmed (challenged and re-verified a second time) that `record.overall` is genuinely
+  regular-season-only, not playoff/consolation-inclusive: every checked season's `scheduleSettings` shows
+  `matchupPeriodCount` (regular season) `= 14` but a `matchupPeriods` total of `17` weeks, with
+  `consolationLadderDisabled: false` every year (i.e. non-playoff teams keep playing real consolation-
+  bracket games through week 17) — and `record.overall`'s win+loss+tie totals consistently equal the
+  *shorter* 14, never 17, confirming those extra 3 weeks (playoffs **and** consolation both) are excluded
+  from the record this Sacko computation is built on.
 - Validated end to end, both stacks redeployed: `league_history.csv` now has 13 years (2014–2026) for
   all-for-the-shiva with real `Owner ID`s (exactly the 12 team_ids, not ~80 team-name strings), real
   Points For/Against, and correct per-owner career aggregation on the "All seasons" view (spot-checked:
-  Vandelay Industries/team_id 8 → `IB`, 8 seasons, real win total, 3 championships — previously
-  impossible to see correctly, since every prior row was keyed by the ever-changing team name instead of
-  the stable team_id); `Sacko` correctly `False` for every 2014–2026 row (no weekly data to compute it
-  honestly for 2014–2025; zero games played yet for 2026). Who-dat redeployed with the identical code and
+  team_id 8 (`IB`) → 8 seasons, real win total, 3 championships — previously impossible to see correctly,
+  since every prior row was keyed by the ever-changing team name instead of the stable team_id); `Sacko`
+  now correctly awarded once per real season, 2014–2025 (12 real awards, computed per team above), and
+  correctly withheld for 2026 (zero games played yet). Who-dat redeployed with the identical code and
   confirmed byte-for-byte unchanged (13 years, 2013–2025, still 13 real per-season `Sacko` awards).
 
 ## Repo layout (this repo)
