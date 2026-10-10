@@ -44,6 +44,21 @@ DESIGN.md decision #15 and `leagues/registry.json`) are all done.
    `leagues/<slug>/weekly_payouts_config.json` holds that league's weekly side-bet rules (optional -
    not every league runs payouts).
 
+   Each week maps to one rule, e.g. `"9": { "type": "highest_total_points", "result": "loser" }`:
+
+   | `type` | Pays |
+   |---|---|
+   | `highest_total_points` | the team with the most starter points |
+   | `top_player_overall` | the team with the single highest-scoring starter |
+   | `top_slot` | the best `slots` group, e.g. `{"WR": 2}` = top two WRs combined |
+   | `top_slot_combo` | every listed slot added together, e.g. `{"QB": 1, "WR": 1}` |
+   | `biggest_blowout` | the winner of the most lopsided matchup |
+   | `smallest_margin_of_victory` | the winner of the closest matchup |
+
+   Optional on any rule: `"result": "winner"` or `"loser"` (only teams that won/lost their matchup
+   are eligible) and `"label"` (display text override). In `slots`, `"FLEX"` means the player
+   started in the flex slot. `make test` checks every league's config against this list.
+
 4. Generate the data:
 
    ```
@@ -95,6 +110,7 @@ league_reports/              # shared report-building code
     weekly_summary.py             # -> weekly_efficiency_awards.csv,
                                    #    survivor_results.json,
                                    #    weekly_payout_winners.json
+    weekly_payouts.py             # payout rule types (who wins a week's side bet)
 scripts/                     # thin local CLI wrappers around league_reports/
   run_all.py                    # regenerates every data file
 site/                        # index.html / style.css - the site itself

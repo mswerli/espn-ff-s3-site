@@ -41,6 +41,13 @@ build-DataGeneratorFunction:
 
 .PHONY: build-DataGeneratorFunction
 
+# Unit tests (tests/) - pure-Python, no ESPN/AWS access. Needs
+# requirements-dev.txt installed (pandas + pytest).
+test:
+	python3 -m pytest tests
+
+.PHONY: test
+
 # --------------------------------------------------------------------------
 # Frontend deploy tooling (.claude/TODO-frontend.md "Deploy tooling") - these are
 # separate from `sam deploy` on purpose (.claude/DESIGN.md decision #2): SAM only

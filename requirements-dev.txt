@@ -7,6 +7,7 @@
 #
 -r requirements.txt
 pandas==2.3.1
+pytest  # `make test`
 
 # Uncomment to exercise league_reports/config.py's S3 + Secrets Manager backend
 # (FF_CONFIG_BACKEND=s3), or league_reports/cache.py (DESIGN.md decision #10a,
