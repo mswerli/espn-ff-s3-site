@@ -55,3 +55,4 @@ coverage.xml
 **/.DS_Store
 
 ignore/
+.pytest_cache/

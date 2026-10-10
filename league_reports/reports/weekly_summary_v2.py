@@ -42,6 +42,13 @@ default/fallback, "weekly_payouts_by_year" holds whole-season overrides
 keyed by year. v1's build_weekly_payouts never gained this - it still
 reads payout_config["weekly_payouts"] directly, unaffected by the new key
 existing alongside it.
+
+DESIGN.md decision #16: which team wins a given payout rule is no longer
+decided here - compute_weekly_payout_week only resolves the week's rule and
+fetches its box scores, then hands both to
+league_reports.reports.weekly_payouts, which owns the payout types
+(including ones v1 never had: matchup-based payouts and the "result"
+winner/loser modifier).
 """
 from collections import defaultdict
 
@@ -49,6 +56,7 @@ import pandas as pd
 
 from league_reports.box_score_cache import get_box_scores
 from league_reports.espn_client import get_league
+from league_reports.reports.weekly_payouts import build_team_weeks, pick_payout_winner
 
 # DESIGN.md decision #15f: this used to hardcode who-dat's own inside-joke
 # trophy names as the fallback for *every* league's "awards" block, which
@@ -278,116 +286,15 @@ def resolve_payout_rules(payout_config, year):
 
 def compute_weekly_payout_week(league, league_id, year, week, payout_config, bucket, is_closed):
     """This week's payout winner, or None if there's no payout rule for
-    this week or nobody qualified. Sourced via box_score_cache."""
+    this week or nobody qualified. Sourced via box_score_cache; the rule
+    logic itself lives in league_reports.reports.weekly_payouts."""
     rules = resolve_payout_rules(payout_config, year)
     if str(week) not in rules:
         return None  # skip weeks with no payout rule
 
-    rule = rules[str(week)]
-    payout_type = rule["type"]
     box_scores = get_box_scores(league, league_id, year, week, bucket, is_closed=is_closed)
     team_lookup = {team.team_id: team for team in league.teams}
-
-    def best(players, count):
-        return sorted(players, key=lambda x: x['points'] or 0, reverse=True)[:count]
-
-    def add_points(players):
-        return sum(p['points'] or 0 for p in players)
-
-    # DESIGN.md decision #15e: an optional per-rule "label" overrides the
-    # payout type's default display text, so a league can call its own
-    # payout something other than the generic name below without a code
-    # change. Falsy (missing/empty) label falls back to the same hardcoded
-    # defaults every league saw before this - byte-identical output for an
-    # unedited config.
-    label = rule.get("label")
-
-    winners = []
-
-    for box in box_scores:
-        for team_id, lineup in [(box['home_team_id'], box['home_lineup']), (box['away_team_id'], box['away_lineup'])]:
-            team = team_lookup.get(team_id)
-            if team is None:
-                continue  # defensive - box_score_cache already drops bye weeks
-
-            owner = f"{team.owners[0]['firstName'][0]}{team.owners[0]['lastName'][0]}"
-            name = team.team_name
-            filtered = [p for p in lineup if p['slot_position'] != "BE" and p['points'] is not None]
-
-            if payout_type == "highest_total_points":
-                total = sum(p['points'] for p in filtered)
-                winners.append({
-                    "team": name,
-                    "owner": owner,
-                    "points": total,
-                    "players": [p['name'] for p in filtered],
-                    "text": label or "Highest Scoring Team"
-                })
-
-            elif payout_type == "top_player_overall":
-                top = max(filtered, key=lambda p: p['points'])
-                winners.append({
-                    "team": name,
-                    "owner": owner,
-                    "points": top['points'],
-                    "players": [top['name']],
-                    "text": label or "Top Individual Player Score"
-                })
-
-            elif payout_type == "top_slot":
-                max_combo = None
-                max_points = -1
-                slot_counts = rule["slots"]
-                for pos, count in slot_counts.items():
-                    eligible = [p for p in filtered if p['position'] == pos]
-                    if len(eligible) >= count:
-                        top_players = best(eligible, count)
-                        points = add_points(top_players)
-                        if points > max_points:
-                            max_points = points
-                            max_combo = top_players
-                if max_combo:
-                    winners.append({
-                        "team": name,
-                        "owner": owner,
-                        "points": max_points,
-                        "players": [p['name'] for p in max_combo],
-                        "text": label or f"Top {', '.join([f'{v}×{k}' for k, v in slot_counts.items()])} Score"
-                    })
-
-            elif payout_type == "top_slot_combo":
-                slot_counts = rule["slots"]
-                selected = []
-                used_ids = set()
-
-                for pos, count in slot_counts.items():
-                    eligible = [p for p in filtered if p['position'] == pos and p['player_id'] not in used_ids]
-                    top_players = best(eligible, count)
-                    used_ids.update(p['player_id'] for p in top_players)
-                    selected.extend(top_players)
-
-                if len(selected) == sum(slot_counts.values()):
-                    total = add_points(selected)
-                    winners.append({
-                        "team": name,
-                        "owner": owner,
-                        "points": total,
-                        "players": [p['name'] for p in selected],
-                        "text": label or f"Top Combo: {', '.join([f'{v}×{k}' for k, v in slot_counts.items()])}"
-                    })
-
-    if not winners:
-        return None
-
-    top = max(winners, key=lambda w: w["points"])
-    return {
-        "week": week,
-        "payout_text": top["text"],
-        "team": top["team"],
-        "owner": top["owner"],
-        "points": round(top["points"], 2),
-        "players": top["players"]
-    }
+    return pick_payout_winner(week, rules[str(week)], build_team_weeks(box_scores, team_lookup))
 
 
 def build_weekly_payouts_v2(league_id, year, swid, espn_s2, payout_config):

@@ -1051,6 +1051,75 @@ present in the raw team list with a real record — the API data is a superset, 
   correctly withheld for 2026 (zero games played yet). Who-dat redeployed with the identical code and
   confirmed byte-for-byte unchanged (13 years, 2013–2025, still 13 real per-season `Sacko` awards).
 
+### 16. Weekly payout rules are composable functions in their own module, plus matchup-based payouts
+
+`weekly_summary_v2.py`'s `compute_weekly_payout_week` was one per-team loop wrapped around an
+`if/elif` chain over four payout types. It only ever saw one team's lineup, so nothing that depends on
+the matchup (who won, by how much) could be expressed, and a rule with an unrecognized `type` fell
+through the chain and silently paid nobody.
+
+The rule logic now lives in `league_reports/reports/weekly_payouts.py` — pure, no ESPN/S3 calls — in
+three layers:
+
+1. **Matchup facts.** `build_team_weeks(box_scores, team_lookup)` returns one dict per team per
+   matchup: `team`, `owner`, `starters`, `score`, `opponent_score`, `margin`, `result` (`W`/`L`/`T`).
+   Built from `home_score`/`away_score`, which `box_score_cache`'s trimmed payload already carried —
+   no cache-shape change, already-cached weeks work as they are.
+2. **Player selection.** `top_n`, `total_points`, `players_for_slot`.
+3. **Payout types.** One function per type, `(team_week, rule) -> candidate or None`, registered in
+   `PAYOUT_TYPES`. `pick_payout_winner(week, rule, team_weeks)` filters, collects candidates and pays
+   the highest (or lowest, for a type registered with `lowest_wins=True`).
+
+`compute_weekly_payout_week` keeps its signature and return shape and is now just: resolve the rule,
+fetch box scores, call `pick_payout_winner`. Adding a payout type is one candidate function plus one
+`PAYOUT_TYPES` entry.
+
+Valid rule `type`s (this is the list — it wasn't written down anywhere before):
+
+| `type` | Pays | `points` in the output |
+|---|---|---|
+| `highest_total_points` | team with the most starter points | that total |
+| `top_player_overall` | team with the single highest-scoring starter | that player's points |
+| `top_slot` | best single `slots` group (several slots listed = best of any one) | that group's points |
+| `top_slot_combo` | every listed slot filled and summed | the sum |
+| `biggest_blowout` | winner of the largest-margin matchup | the margin |
+| `smallest_margin_of_victory` | winner of the smallest-margin matchup | the margin |
+
+Rule modifiers, valid on every type:
+
+- `"result": "winner"` / `"loser"` — only teams that won/lost their matchup are eligible. This is how
+  "Highest Scoring Losing Team" is expressed (`highest_total_points` + `"result": "loser"`), rather
+  than as a separate type: it's the same scoring, a different pool of teams. Because the filter runs
+  before the type's own function, it composes with all of them for free.
+- `"label"` — display text override (decision #15e), unchanged.
+
+Rules worth knowing:
+
+- **Win/loss and margin use ESPN's official matchup score**; `highest_total_points` still reports the
+  sum of the starters' points, as it always has, so existing weeks' output is unchanged.
+- **A tied matchup has no winner or loser**: neither team is eligible for the margin types or for
+  any rule with a `result` modifier.
+- **Equal `points` between candidates**: first in box order wins, one winner per week, as before.
+- **`"FLEX"` in `slots` means the flex lineup slot** (`slot_position == "RB/WR/TE"`). `slots` keys
+  were only ever compared to a player's real position, which is never `"FLEX"`, so who-dat's week-12
+  `{"FLEX": 1}` rule had been matching nobody. Any season computed (or re-backfilled) with the default
+  rules from now on gets a week-12 winner.
+- **Unknown `type` or `result`**: prints a warning and pays nobody. It doesn't raise, because payouts
+  share the `weekly_summary_v2` step with efficiency and survivor. `tests/test_weekly_payouts.py`
+  checks every `leagues/*/weekly_payouts_config.json` against `PAYOUT_TYPES` so a typo is caught
+  before deploy instead.
+
+`v1`'s `weekly_summary.py` was **not** touched and has none of this, so `scripts/compare_v2.py
+weekly_summary` now reports a v1/v2 difference for any week using a new type, a `result` modifier or
+`FLEX`. That's expected.
+
+The front end needed no change: it reads only `week`, `payout_text`, `owner` and `points`, and renders
+a margin payout as e.g. "Smallest Margin of Victory: MS (3.2 pts)".
+
+This also added the repo's first tests: `make test` (pytest, in `requirements-dev.txt`), covering the
+four original types as they behaved before the refactor plus everything above, against hand-built box
+scores — no ESPN or AWS access needed.
+
 ## Repo layout (this repo)
 
 ```
